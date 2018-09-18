@@ -1,0 +1,27 @@
+From 5344514514546a18096bf8b7c1aaa332bec42921 Mon Sep 17 00:00:00 2001
+From: Dong Aisheng <b29396@freescale.com>
+Date: Thu, 22 Sep 2011 17:16:06 +0800
+Subject: [PATCH] ENGR00157413 asrc: fix mem to mem mode sounds incorrect issue
+
+Reset reg variable before setting or it will set an unexpected wrong value.
+
+Signed-off-by: Dong Aisheng <b29396@freescale.com>
+---
+ drivers/mxc/asrc/mxc_asrc.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/mxc/asrc/mxc_asrc.c b/drivers/mxc/asrc/mxc_asrc.c
+index 5db4451..3b870e5 100644
+--- a/drivers/mxc/asrc/mxc_asrc.c
++++ b/drivers/mxc/asrc/mxc_asrc.c
+@@ -581,6 +581,7 @@ int asrc_config_pair(struct asrc_config *config)
+ 		 * for mx53, we need to set input data format
+ 		 * and output data format
+ 		 */
++		reg = 0;
+ 		if (config->word_width == 16)
+ 			reg = 0x1 << 9;
+ 		else if (config->word_width == 8)
+-- 
+1.5.4.4
+

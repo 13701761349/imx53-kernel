@@ -1,0 +1,35 @@
+From 67a02016c6ff7f4a7c7cd0040d9ef9b493ce8288 Mon Sep 17 00:00:00 2001
+From: Xinyu Chen <xinyu.chen@freescale.com>
+Date: Mon, 23 May 2011 16:35:33 +0800
+Subject: [PATCH] ENGR00143856 mx51 bbg: remove unused wvga display pins configure
+
+Remove unused wvga related display pins configure for CLAA WVGA panel.
+On mx508 RD3 board, we enable CONFIG_FB_MXC_CLAA_WVGA_SYNC_PANEL for
+it's CLAA WVGA panel display, but BBG platform do not need this.
+Otherwise, the pin configure will conflict with DVI display on BBG.
+
+Signed-off-by: Xinyu Chen <xinyu.chen@freescale.com>
+---
+ arch/arm/mach-mx5/mx51_babbage.c |    6 ------
+ 1 files changed, 0 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx51_babbage.c b/arch/arm/mach-mx5/mx51_babbage.c
+index f34cc3d..92c8a56 100644
+--- a/arch/arm/mach-mx5/mx51_babbage.c
++++ b/arch/arm/mach-mx5/mx51_babbage.c
+@@ -185,12 +185,6 @@ static iomux_v3_cfg_t mx51babbage_pads[] = {
+ 	MX51_PAD_GPIO_NAND__PATA_INTRQ,
+ 
+ 	MX51_PAD_DI_GP4__DI2_PIN15,
+-#ifdef CONFIG_FB_MXC_CLAA_WVGA_SYNC_PANEL
+-	MX51_PAD_DISP1_DAT22__DISP2_DAT16,
+-	MX51_PAD_DISP1_DAT23__DISP2_DAT17,
+-
+-	MX51_PAD_DI1_D1_CS__GPIO3_4,
+-#endif
+ 	MX51_PAD_I2C1_CLK__I2C1_CLK,
+ 	MX51_PAD_I2C1_DAT__I2C1_DAT,
+ 	MX51_PAD_EIM_D16__I2C1_SDA,
+-- 
+1.5.4.4
+

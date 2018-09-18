@@ -1,0 +1,777 @@
+From abde4ec2e00e724f2f6acb44d66f69dc3a39386d Mon Sep 17 00:00:00 2001
+From: Liu Ying <Ying.Liu@freescale.com>
+Date: Tue, 2 Aug 2011 12:09:11 +0800
+Subject: [PATCH] ENGR00154226-1 IPUv3:Improve driver
+
+1) Fix race condition issue for enable/disable ipu clk.
+2) Remove uninitializing MEM_FG_SYNC channel when
+   suspend for Android.
+
+Signed-off-by: Liu Ying <Ying.Liu@freescale.com>
+---
+ drivers/mxc/ipu3/ipu_capture.c |  148 ++++++++++++++--------------------------
+ drivers/mxc/ipu3/ipu_common.c  |   91 +++++++++++++++----------
+ drivers/mxc/ipu3/ipu_disp.c    |   32 +++------
+ drivers/mxc/ipu3/ipu_prv.h     |    6 +-
+ 4 files changed, 121 insertions(+), 156 deletions(-)
+
+diff --git a/drivers/mxc/ipu3/ipu_capture.c b/drivers/mxc/ipu3/ipu_capture.c
+index 700b32b..da25227 100644
+--- a/drivers/mxc/ipu3/ipu_capture.c
++++ b/drivers/mxc/ipu3/ipu_capture.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright 2008-2010 Freescale Semiconductor, Inc. All Rights Reserved.
++ * Copyright 2008-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+  */
+ 
+ /*
+@@ -94,12 +94,7 @@ ipu_csi_init_interface(uint16_t width, uint16_t height, uint32_t pixel_fmt,
+ 		cfg_param.force_eof << CSI_SENS_CONF_FORCE_EOF_SHIFT |
+ 		cfg_param.data_en_pol << CSI_SENS_CONF_DATA_EN_POL_SHIFT;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	__raw_writel(data, CSI_SENS_CONF(csi));
+@@ -167,6 +162,7 @@ ipu_csi_init_interface(uint16_t width, uint16_t height, uint32_t pixel_fmt,
+ 		__raw_readl(CSI_ACT_FRM_SIZE(csi)));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ 
+ 	return 0;
+ }
+@@ -181,9 +177,20 @@ EXPORT_SYMBOL(ipu_csi_init_interface);
+  */
+ int32_t ipu_csi_get_sensor_protocol(uint32_t csi)
+ {
+-	return (__raw_readl(CSI_SENS_CONF(csi)) &
++	int32_t ret;
++	unsigned long lock_flags;
++
++	ipu_get_clk(false);
++	spin_lock_irqsave(&ipu_lock, lock_flags);
++
++	ret = (__raw_readl(CSI_SENS_CONF(csi)) &
+ 		CSI_SENS_CONF_SENS_PRTCL_MASK) >>
+ 		CSI_SENS_CONF_SENS_PRTCL_SHIFT;
++
++	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
++
++	return ret;
+ }
+ EXPORT_SYMBOL(ipu_csi_get_sensor_protocol);
+ 
+@@ -250,12 +257,7 @@ void ipu_csi_get_window_size(uint32_t *width, uint32_t *height, uint32_t csi)
+ 	uint32_t reg;
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	reg = __raw_readl(CSI_ACT_FRM_SIZE(csi));
+@@ -263,6 +265,7 @@ void ipu_csi_get_window_size(uint32_t *width, uint32_t *height, uint32_t csi)
+ 	*height = (reg >> 16 & 0xFFFF) + 1;
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ EXPORT_SYMBOL(ipu_csi_get_window_size);
+ 
+@@ -277,17 +280,13 @@ void ipu_csi_set_window_size(uint32_t width, uint32_t height, uint32_t csi)
+ {
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	__raw_writel((width - 1) | (height - 1) << 16, CSI_ACT_FRM_SIZE(csi));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ EXPORT_SYMBOL(ipu_csi_set_window_size);
+ 
+@@ -303,12 +302,7 @@ void ipu_csi_set_window_pos(uint32_t left, uint32_t top, uint32_t csi)
+ 	uint32_t temp;
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_OUT_FRM_CTRL(csi));
+@@ -317,6 +311,7 @@ void ipu_csi_set_window_pos(uint32_t left, uint32_t top, uint32_t csi)
+ 	__raw_writel(temp, CSI_OUT_FRM_CTRL(csi));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ EXPORT_SYMBOL(ipu_csi_set_window_pos);
+ 
+@@ -331,12 +326,7 @@ void _ipu_csi_horizontal_downsize_enable(uint32_t csi)
+ 	uint32_t temp;
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_OUT_FRM_CTRL(csi));
+@@ -344,6 +334,7 @@ void _ipu_csi_horizontal_downsize_enable(uint32_t csi)
+ 	__raw_writel(temp, CSI_OUT_FRM_CTRL(csi));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ 
+ /*!
+@@ -357,12 +348,7 @@ void _ipu_csi_horizontal_downsize_disable(uint32_t csi)
+ 	uint32_t temp;
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_OUT_FRM_CTRL(csi));
+@@ -370,6 +356,7 @@ void _ipu_csi_horizontal_downsize_disable(uint32_t csi)
+ 	__raw_writel(temp, CSI_OUT_FRM_CTRL(csi));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ 
+ /*!
+@@ -383,12 +370,7 @@ void _ipu_csi_vertical_downsize_enable(uint32_t csi)
+ 	uint32_t temp;
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_OUT_FRM_CTRL(csi));
+@@ -396,6 +378,7 @@ void _ipu_csi_vertical_downsize_enable(uint32_t csi)
+ 	__raw_writel(temp, CSI_OUT_FRM_CTRL(csi));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ 
+ /*!
+@@ -409,12 +392,7 @@ void _ipu_csi_vertical_downsize_disable(uint32_t csi)
+ 	uint32_t temp;
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_OUT_FRM_CTRL(csi));
+@@ -422,6 +400,7 @@ void _ipu_csi_vertical_downsize_disable(uint32_t csi)
+ 	__raw_writel(temp, CSI_OUT_FRM_CTRL(csi));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ 
+ /*!
+@@ -441,12 +420,7 @@ void ipu_csi_set_test_generator(bool active, uint32_t r_value,
+ 	uint32_t temp;
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_TST_CTRL(csi));
+@@ -468,6 +442,7 @@ void ipu_csi_set_test_generator(bool active, uint32_t r_value,
+ 	}
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ EXPORT_SYMBOL(ipu_csi_set_test_generator);
+ 
+@@ -482,12 +457,6 @@ void _ipu_csi_ccir_err_detection_enable(uint32_t csi)
+ {
+ 	uint32_t temp;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
+ 	temp = __raw_readl(CSI_CCIR_CODE_1(csi));
+ 	temp |= CSI_CCIR_ERR_DET_EN;
+ 	__raw_writel(temp, CSI_CCIR_CODE_1(csi));
+@@ -504,12 +473,6 @@ void _ipu_csi_ccir_err_detection_disable(uint32_t csi)
+ {
+ 	uint32_t temp;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
+ 	temp = __raw_readl(CSI_CCIR_CODE_1(csi));
+ 	temp &= ~CSI_CCIR_ERR_DET_EN;
+ 	__raw_writel(temp, CSI_CCIR_CODE_1(csi));
+@@ -532,15 +495,10 @@ int _ipu_csi_set_mipi_di(uint32_t num, uint32_t di_val, uint32_t csi)
+ 
+ 	if (di_val > 0xFFL) {
+ 		retval = -EINVAL;
+-		goto err;
+-	}
+-
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
++		goto err1;
+ 	}
+ 
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_MIPI_DI(csi));
+@@ -568,11 +526,13 @@ int _ipu_csi_set_mipi_di(uint32_t num, uint32_t di_val, uint32_t csi)
+ 		break;
+ 	default:
+ 		retval = -EINVAL;
+-		goto err;
++		goto err2;
+ 	}
+ 
++err2:
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+-err:
++	ipu_put_clk();
++err1:
+ 	return retval;
+ }
+ 
+@@ -598,12 +558,7 @@ int _ipu_csi_set_skip_isp(uint32_t skip, uint32_t max_ratio, uint32_t csi)
+ 		goto err;
+ 	}
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_SKIP(csi));
+@@ -613,6 +568,7 @@ int _ipu_csi_set_skip_isp(uint32_t skip, uint32_t max_ratio, uint32_t csi)
+ 	__raw_writel(temp, CSI_SKIP(csi));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ err:
+ 	return retval;
+ }
+@@ -641,12 +597,7 @@ int _ipu_csi_set_skip_smfc(uint32_t skip, uint32_t max_ratio,
+ 		goto err;
+ 	}
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(CSI_SKIP(csi));
+@@ -658,6 +609,7 @@ int _ipu_csi_set_skip_smfc(uint32_t skip, uint32_t max_ratio,
+ 	__raw_writel(temp, CSI_SKIP(csi));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ err:
+ 	return retval;
+ }
+@@ -715,12 +667,7 @@ void _ipu_smfc_set_wmc(ipu_channel_t channel, bool set, uint32_t level)
+ 	uint32_t temp;
+ 	unsigned long lock_flags;
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(SMFC_WMC);
+@@ -763,12 +710,15 @@ void _ipu_smfc_set_wmc(ipu_channel_t channel, bool set, uint32_t level)
+ 		}
+ 		break;
+ 	default:
+-		return;
++		goto out;
++		break;
+ 	}
+ 
+ 	__raw_writel(temp, SMFC_WMC);
+ 
++out:
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ 
+ /*!
+@@ -783,6 +733,7 @@ void _ipu_smfc_set_burst_size(ipu_channel_t channel, uint32_t bs)
+ 	uint32_t temp;
+ 	unsigned long lock_flags;
+ 
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	temp = __raw_readl(SMFC_BS);
+@@ -805,12 +756,15 @@ void _ipu_smfc_set_burst_size(ipu_channel_t channel, uint32_t bs)
+ 		temp |= bs << SMFC_BS3_SHIFT;
+ 		break;
+ 	default:
+-		return;
++		goto out;
++		break;
+ 	}
+ 
+ 	__raw_writel(temp, SMFC_BS);
+ 
++out:
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
++	ipu_put_clk();
+ }
+ 
+ /*!
+diff --git a/drivers/mxc/ipu3/ipu_common.c b/drivers/mxc/ipu3/ipu_common.c
+index 7aa9640..76d34ce 100644
+--- a/drivers/mxc/ipu3/ipu_common.c
++++ b/drivers/mxc/ipu3/ipu_common.c
+@@ -45,7 +45,6 @@ struct ipu_irq_node {
+ 
+ /* Globals */
+ struct clk *g_ipu_clk;
+-bool g_ipu_clk_enabled;
+ struct clk *g_di_clk[2];
+ struct clk *g_pixel_clk[2];
+ struct clk *g_csi_clk[2];
+@@ -53,12 +52,14 @@ unsigned char g_dc_di_assignment[10];
+ ipu_channel_t g_ipu_csi_channel[2];
+ int g_ipu_irq[2];
+ int g_ipu_hw_rev;
++int g_ipu_use_count;
+ bool g_sec_chan_en[24];
+ bool g_thrd_chan_en[24];
+ bool g_chan_is_interlaced[52];
+ uint32_t g_channel_init_mask;
+ uint32_t g_channel_enable_mask;
+ DEFINE_SPINLOCK(ipu_lock);
++DEFINE_MUTEX(ipu_clk_lock);
+ struct device *g_ipu_dev;
+ 
+ static struct ipu_irq_node ipu_irq_list[IPU_IRQ_COUNT];
+@@ -275,6 +276,7 @@ static int ipu_probe(struct platform_device *pdev)
+ 	unsigned long ipu_base;
+ 
+ 	spin_lock_init(&ipu_lock);
++	mutex_init(&ipu_clk_lock);
+ 
+ 	g_ipu_hw_rev = plat_data->rev;
+ 
+@@ -419,9 +421,43 @@ int ipu_remove(struct platform_device *pdev)
+ 	iounmap(ipu_disp_base[1]);
+ 	iounmap(ipu_vdi_reg);
+ 
++	mutex_destroy(&ipu_clk_lock);
++
+ 	return 0;
+ }
+ 
++void ipu_get_clk(bool stop_dvfs)
++{
++	mutex_lock(&ipu_clk_lock);
++
++	g_ipu_use_count++;
++
++	if (g_ipu_use_count == 1) {
++		if (stop_dvfs)
++			stop_dvfs_per();
++		clk_enable(g_ipu_clk);
++	}
++
++	mutex_unlock(&ipu_clk_lock);
++}
++
++void ipu_put_clk(void)
++{
++	mutex_lock(&ipu_clk_lock);
++
++	g_ipu_use_count--;
++
++	if (g_ipu_use_count == 0)
++		clk_disable(g_ipu_clk);
++
++	if (g_ipu_use_count < 0) {
++		dev_err(g_ipu_dev, "ipu use count < 0\n");
++		g_ipu_use_count = 0;
++	}
++
++	mutex_unlock(&ipu_clk_lock);
++}
++
+ void ipu_dump_registers(void)
+ {
+ 	printk(KERN_DEBUG "IPU_CONF = \t0x%08X\n", __raw_readl(IPU_CONF));
+@@ -493,11 +529,7 @@ int32_t ipu_init_channel(ipu_channel_t channel, ipu_channel_params_t *params)
+ 	__raw_writel(0xFFFFFFFF, IPU_INT_CTRL(9));
+ 	__raw_writel(0xFFFFFFFF, IPU_INT_CTRL(10));
+ 
+-	if (g_ipu_clk_enabled == false) {
+-		stop_dvfs_per();
+-		g_ipu_clk_enabled = true;
+-		clk_enable(g_ipu_clk);
+-	}
++	ipu_get_clk(true);
+ 
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+@@ -956,10 +988,7 @@ void ipu_uninit_channel(ipu_channel_t channel)
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+ 
+-	if (ipu_conf == 0) {
+-		clk_disable(g_ipu_clk);
+-		g_ipu_clk_enabled = false;
+-	}
++	ipu_put_clk();
+ 
+ 	WARN_ON(ipu_ic_use_count < 0);
+ 	WARN_ON(ipu_vdi_use_count < 0);
+@@ -2247,9 +2276,7 @@ void ipu_enable_irq(uint32_t irq)
+ 	uint32_t reg;
+ 	unsigned long lock_flags;
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	reg = __raw_readl(IPUIRQ_2_CTRLREG(irq));
+@@ -2257,8 +2284,7 @@ void ipu_enable_irq(uint32_t irq)
+ 	__raw_writel(reg, IPUIRQ_2_CTRLREG(irq));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
++	ipu_put_clk();
+ }
+ EXPORT_SYMBOL(ipu_enable_irq);
+ 
+@@ -2274,8 +2300,6 @@ void ipu_disable_irq(uint32_t irq)
+ 	uint32_t reg;
+ 	unsigned long lock_flags;
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	reg = __raw_readl(IPUIRQ_2_CTRLREG(irq));
+@@ -2283,8 +2307,6 @@ void ipu_disable_irq(uint32_t irq)
+ 	__raw_writel(reg, IPUIRQ_2_CTRLREG(irq));
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
+ }
+ EXPORT_SYMBOL(ipu_disable_irq);
+ 
+@@ -2297,13 +2319,12 @@ EXPORT_SYMBOL(ipu_disable_irq);
+  */
+ void ipu_clear_irq(uint32_t irq)
+ {
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
++	ipu_get_clk(false);
+ 
+ 	__raw_writel(IPUIRQ_2_MASK(irq), IPUIRQ_2_STATREG(irq));
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
++	ipu_put_clk();
++
+ }
+ EXPORT_SYMBOL(ipu_clear_irq);
+ 
+@@ -2320,13 +2341,11 @@ bool ipu_get_irq_status(uint32_t irq)
+ {
+ 	uint32_t reg;
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
++	ipu_get_clk(false);
+ 
+ 	reg = __raw_readl(IPUIRQ_2_STATREG(irq));
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
++	ipu_put_clk();
+ 
+ 	if (reg & IPUIRQ_2_MASK(irq))
+ 		return true;
+@@ -2398,7 +2417,9 @@ EXPORT_SYMBOL(ipu_request_irq);
+  */
+ void ipu_free_irq(uint32_t irq, void *dev_id)
+ {
++	ipu_get_clk(false);
+ 	ipu_disable_irq(irq);	/* disable the interrupt */
++	ipu_put_clk();
+ 
+ 	if (ipu_irq_list[irq].dev_id == dev_id)
+ 		ipu_irq_list[irq].handler = NULL;
+@@ -2592,14 +2613,12 @@ EXPORT_SYMBOL(ipu_set_csc_coefficients);
+ 
+ static int ipu_suspend(struct platform_device *pdev, pm_message_t state)
+ {
+-#ifdef CONFIG_ANDROID
+-	ipu_disable_channel(MEM_FG_SYNC, true);
+-	ipu_uninit_channel(MEM_FG_SYNC);
+-#endif
+-
+-	if (g_ipu_clk_enabled) {
++	mutex_lock(&ipu_clk_lock);
++	if (g_ipu_use_count > 0) {
+ 		uint32_t chan_should_disable, timeout = 1000, time = 0;
+ 
++		dev_err(g_ipu_dev, "ipu suspend with ipu clock enabled\n");
++
+ 		/* save and disable enabled channels*/
+ 		idma_enable_reg[0] = __raw_readl(IDMAC_CHA_EN(0));
+ 		idma_enable_reg[1] = __raw_readl(IDMAC_CHA_EN(32));
+@@ -2678,6 +2697,7 @@ static int ipu_suspend(struct platform_device *pdev, pm_message_t state)
+ 		buf_ready_reg[8] = __raw_readl(IPU_CHA_BUF2_RDY(0));
+ 		buf_ready_reg[9] = __raw_readl(IPU_CHA_BUF2_RDY(32));
+ 	}
++	mutex_unlock(&ipu_clk_lock);
+ 
+ 	mxc_pg_enable(pdev);
+ 
+@@ -2688,8 +2708,8 @@ static int ipu_resume(struct platform_device *pdev)
+ {
+ 	mxc_pg_disable(pdev);
+ 
+-	if (g_ipu_clk_enabled) {
+-
++	mutex_lock(&ipu_clk_lock);
++	if (g_ipu_use_count > 0) {
+ 		/* restore buf ready regs */
+ 		__raw_writel(buf_ready_reg[0], IPU_CHA_BUF0_RDY(0));
+ 		__raw_writel(buf_ready_reg[1], IPU_CHA_BUF0_RDY(32));
+@@ -2753,6 +2773,7 @@ static int ipu_resume(struct platform_device *pdev)
+ 		__raw_writel(0x18800001L, IDMAC_CHA_PRI(0));
+ 		clk_disable(g_ipu_clk);
+ 	}
++	mutex_unlock(&ipu_clk_lock);
+ 
+ 	return 0;
+ }
+diff --git a/drivers/mxc/ipu3/ipu_disp.c b/drivers/mxc/ipu3/ipu_disp.c
+index bc417ab..23fe511 100644
+--- a/drivers/mxc/ipu3/ipu_disp.c
++++ b/drivers/mxc/ipu3/ipu_disp.c
+@@ -1665,8 +1665,7 @@ int32_t ipu_disp_set_global_alpha(ipu_channel_t channel, bool enable,
+ 	else
+ 		bg_chan = false;
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	if (bg_chan) {
+@@ -1693,8 +1692,7 @@ int32_t ipu_disp_set_global_alpha(ipu_channel_t channel, bool enable,
+ 	__raw_writel(reg, IPU_SRM_PRI2);
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
++	ipu_put_clk();
+ 
+ 	return 0;
+ }
+@@ -1728,9 +1726,7 @@ int32_t ipu_disp_set_color_key(ipu_channel_t channel, bool enable,
+ 	else
+ 		return -EINVAL;
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	color_key_4rgb = 1;
+@@ -1771,8 +1767,7 @@ int32_t ipu_disp_set_color_key(ipu_channel_t channel, bool enable,
+ 	__raw_writel(reg, IPU_SRM_PRI2);
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
++	ipu_put_clk();
+ 
+ 	return 0;
+ }
+@@ -1805,8 +1800,7 @@ int32_t ipu_disp_set_gamma_correction(ipu_channel_t channel, bool enable, int co
+ 	else
+ 		return -EINVAL;
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	for (i = 0; i < 8; i++)
+@@ -1829,8 +1823,7 @@ int32_t ipu_disp_set_gamma_correction(ipu_channel_t channel, bool enable, int co
+ 	__raw_writel(reg, IPU_SRM_PRI2);
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
++	ipu_put_clk();
+ 
+ 	return 0;
+ }
+@@ -1870,9 +1863,7 @@ int32_t ipu_disp_set_window_pos(ipu_channel_t channel, int16_t x_pos,
+ 	} else
+ 		return -EINVAL;
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
+-
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	__raw_writel((x_pos << 16) | y_pos, DP_FG_POS(flow));
+@@ -1889,8 +1880,7 @@ int32_t ipu_disp_set_window_pos(ipu_channel_t channel, int16_t x_pos,
+ 	}
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
++	ipu_put_clk();
+ 
+ 	return 0;
+ }
+@@ -1912,8 +1902,7 @@ int32_t ipu_disp_get_window_pos(ipu_channel_t channel, int16_t *x_pos,
+ 	else
+ 		return -EINVAL;
+ 
+-	if (!g_ipu_clk_enabled)
+-		clk_enable(g_ipu_clk);
++	ipu_get_clk(false);
+ 	spin_lock_irqsave(&ipu_lock, lock_flags);
+ 
+ 	reg = __raw_readl(DP_FG_POS(flow));
+@@ -1922,8 +1911,7 @@ int32_t ipu_disp_get_window_pos(ipu_channel_t channel, int16_t *x_pos,
+ 	*y_pos = reg & 0x7FF;
+ 
+ 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+-	if (!g_ipu_clk_enabled)
+-		clk_disable(g_ipu_clk);
++	ipu_put_clk();
+ 
+ 	return 0;
+ }
+diff --git a/drivers/mxc/ipu3/ipu_prv.h b/drivers/mxc/ipu3/ipu_prv.h
+index df55b1c..8557fbd 100644
+--- a/drivers/mxc/ipu3/ipu_prv.h
++++ b/drivers/mxc/ipu3/ipu_prv.h
+@@ -22,13 +22,14 @@
+ /* Globals */
+ extern struct device *g_ipu_dev;
+ extern spinlock_t ipu_lock;
+-extern bool g_ipu_clk_enabled;
++extern struct mutex ipu_clk_lock;
+ extern struct clk *g_ipu_clk;
+ extern struct clk *g_di_clk[2];
+ extern struct clk *g_pixel_clk[2];
+ extern struct clk *g_csi_clk[2];
+ extern unsigned char g_dc_di_assignment[];
+ extern int g_ipu_hw_rev;
++extern int g_ipu_use_count;
+ extern int dmfc_type_setup;
+ 
+ #define IDMA_CHAN_INVALID	0xFF
+@@ -51,7 +52,8 @@ enum ipu_dmfc_type {
+ int register_ipu_device(void);
+ ipu_color_space_t format_to_colorspace(uint32_t fmt);
+ bool ipu_pixel_format_has_alpha(uint32_t fmt);
+-
++void ipu_get_clk(bool stop_dvfs);
++void ipu_put_clk(void);
+ void ipu_dump_registers(void);
+ 
+ uint32_t _ipu_channel_status(ipu_channel_t channel);
+-- 
+1.5.4.4
+

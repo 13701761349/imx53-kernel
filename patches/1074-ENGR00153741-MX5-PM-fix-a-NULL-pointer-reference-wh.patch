@@ -1,0 +1,38 @@
+From cb34fb66f8841f173b0025d259858596071c5536 Mon Sep 17 00:00:00 2001
+From: Wayne Zou <b36644@freescale.com>
+Date: Wed, 27 Jul 2011 10:30:59 +0800
+Subject: [PATCH] ENGR00153741 MX5 PM: fix a NULL pointer reference when enter suspend
+
+Fix the NULL pointer reference when there is no
+struct mxc_pm_platform_data defines on MX5 machines.
+
+Signed-off-by: Wayne Zou <b36644@freescale.com>
+---
+ arch/arm/mach-mx5/pm.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/pm.c b/arch/arm/mach-mx5/pm.c
+index a8acfbe..54bb321 100644
+--- a/arch/arm/mach-mx5/pm.c
++++ b/arch/arm/mach-mx5/pm.c
+@@ -90,7 +90,7 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 		local_flush_tlb_all();
+ 		flush_cache_all();
+ 
+-		if (pm_data->suspend_enter)
++		if (pm_data && pm_data->suspend_enter)
+ 			pm_data->suspend_enter();
+ 		if (cpu_is_mx51() || cpu_is_mx53()) {
+ 			/* Run the suspend code from iRAM. */
+@@ -115,7 +115,7 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 
+ 			}
+ 		}
+-		if (pm_data->suspend_exit)
++		if (pm_data && pm_data->suspend_exit)
+ 			pm_data->suspend_exit();
+ 	} else {
+ 			cpu_do_idle();
+-- 
+1.5.4.4
+

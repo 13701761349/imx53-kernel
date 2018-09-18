@@ -1,0 +1,64 @@
+From 7e4c452de18618ec140a0a1d00171ce776a00d83 Mon Sep 17 00:00:00 2001
+From: Jason Chen <b02280@freescale.com>
+Date: Wed, 14 Sep 2011 16:23:03 +0800
+Subject: [PATCH] ENGR00156183-1 mx53_loco: add get_pins/put_pins call back for sii902x
+
+there is hardware pin conflict between sii902x DET and egalax touch screen
+on mx53 loco board. Request gpio during sii902x probe can fix this conflict
+only when these two module not co-exist.
+
+Signed-off-by: Jason Chen <b02280@freescale.com>
+---
+ arch/arm/mach-mx5/mx53_loco.c |   28 ++++++++++++++++++++--------
+ 1 files changed, 20 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx53_loco.c b/arch/arm/mach-mx5/mx53_loco.c
+index 301ea1b..c8417da 100644
+--- a/arch/arm/mach-mx5/mx53_loco.c
++++ b/arch/arm/mach-mx5/mx53_loco.c
+@@ -484,9 +484,27 @@ static void sii902x_hdmi_reset(void)
+ 	msleep(10);
+ }
+ 
++static int sii902x_get_pins(void)
++{
++	/* Sii902x HDMI controller */
++	gpio_request(DISP0_RESET, "disp0-reset");
++	gpio_direction_output(DISP0_RESET, 0);
++	gpio_request(DISP0_DET_INT, "disp0-detect");
++	gpio_direction_input(DISP0_DET_INT);
++	return 1;
++}
++
++static void sii902x_put_pins(void)
++{
++	gpio_free(DISP0_RESET);
++	gpio_free(DISP0_DET_INT);
++}
++
+ static struct mxc_lcd_platform_data sii902x_hdmi_data = {
+-       .reset = sii902x_hdmi_reset,
+-       .fb_id = "DISP3 BG",
++	.reset = sii902x_hdmi_reset,
++	.fb_id = "DISP3 BG",
++	.get_pins = sii902x_get_pins,
++	.put_pins = sii902x_put_pins,
+ };
+ 
+ static struct imxi2c_platform_data mxci2c_data = {
+@@ -843,12 +861,6 @@ static void __init mx53_loco_io_init(void)
+ 	gpio_request(USB_PWREN, "usb-pwr");
+ 	gpio_direction_output(USB_PWREN, 0);
+ 
+-	/* Sii902x HDMI controller */
+-	gpio_request(DISP0_RESET, "disp0-reset");
+-	gpio_direction_output(DISP0_RESET, 0);
+-	gpio_request(DISP0_DET_INT, "disp0-detect");
+-	gpio_direction_input(DISP0_DET_INT);
+-
+ 	/* LCD panel power enable */
+ 	gpio_request(DISP0_POWER_EN, "disp0-power-en");
+ 	gpio_direction_output(DISP0_POWER_EN, 1);
+-- 
+1.5.4.4
+

@@ -1,0 +1,37 @@
+From 0bb00997b5778b12551e662beb07ccc0cb01b925 Mon Sep 17 00:00:00 2001
+From: Dong Aisheng <b29396@freescale.com>
+Date: Mon, 22 Aug 2011 17:15:20 +0800
+Subject: [PATCH] ENGR00155173 mx53_ard: fix CAN unable to communicate issue
+
+Merge this patch for SR 1-775080061.
+The error is the system can find the CAN bus, but cannot communicate
+physically.
+
+Signed-off-by: Dong Aisheng <b29396@freescale.com>
+---
+ arch/arm/mach-mx5/mx53_ard.c |    7 +++++--
+ 1 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx53_ard.c b/arch/arm/mach-mx5/mx53_ard.c
+index f9cda06..6550ca9 100644
+--- a/arch/arm/mach-mx5/mx53_ard.c
++++ b/arch/arm/mach-mx5/mx53_ard.c
+@@ -443,10 +443,13 @@ static void flexcan_xcvr_enable(int id, int en)
+ 	if (id < 0 || id > 1)
+ 		return;
+ 
+-	if (en)
++	if (en) {
+ 		gpio_set_value(ARD_CAN_EN, 1);
+-	else
++		gpio_set_value(ARD_CAN_STBY, 1);
++	} else {
+ 		gpio_set_value(ARD_CAN_EN, 0);
++		gpio_set_value(ARD_CAN_STBY, 0);
++	}
+ }
+ 
+ static struct flexcan_platform_data flexcan0_data = {
+-- 
+1.5.4.4
+

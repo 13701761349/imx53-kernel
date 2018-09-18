@@ -1,0 +1,101 @@
+From b336fefe6dfd8f18d994e71b241fee464fed194c Mon Sep 17 00:00:00 2001
+From: Jason Chen <b02280@freescale.com>
+Date: Fri, 1 Jul 2011 14:47:58 +0800
+Subject: [PATCH] ENGR00152359-2 ipuv3: add VYU444 fmt
+
+1.add VYU444 fmt to support Sii902x hdmi yuv format
+2.make pixel clock from internal ipu clock more accurate
+
+Signed-off-by: Jason Chen <b02280@freescale.com>
+---
+ drivers/mxc/ipu3/ipu_disp.c      |   27 +++++++++++++++++----------
+ drivers/mxc/ipu3/ipu_param_mem.h |    7 +++++++
+ include/linux/ipu.h              |    1 +
+ 3 files changed, 25 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/mxc/ipu3/ipu_disp.c b/drivers/mxc/ipu3/ipu_disp.c
+index 8df2811..bc417ab 100644
+--- a/drivers/mxc/ipu3/ipu_disp.c
++++ b/drivers/mxc/ipu3/ipu_disp.c
+@@ -920,6 +920,7 @@ void _ipu_init_dc_mappings(void)
+ 	_ipu_dc_map_link(12, 5, 2, 5, 1, 5, 0);
+ 
+ 	/* IPU_PIX_FMT_GBR24 */
++	/* IPU_PIX_FMT_VYU444 */
+ 	_ipu_dc_map_clear(13);
+ 	_ipu_dc_map_link(13, 0, 2, 0, 0, 0, 1);
+ 
+@@ -951,6 +952,7 @@ int _ipu_pixfmt_to_map(uint32_t fmt)
+ 	case IPU_PIX_FMT_YVYU:
+ 		return 12;
+ 	case IPU_PIX_FMT_GBR24:
++	case IPU_PIX_FMT_VYU444:
+ 		return 13;
+ 	case IPU_PIX_FMT_BGR24:
+ 		return 14;
+@@ -1098,17 +1100,22 @@ int32_t ipu_init_sync_panel(int disp, uint32_t pixel_clk,
+ 		 * so if the clk rate is not fit, try ext clk.
+ 		 */
+ 		if (!sig.int_clk &&
+-			((rounded_pixel_clk >= pixel_clk + pixel_clk/16) ||
+-			(rounded_pixel_clk <= pixel_clk - pixel_clk/16))) {
++			((rounded_pixel_clk >= pixel_clk + pixel_clk/200) ||
++			(rounded_pixel_clk <= pixel_clk - pixel_clk/200))) {
+ 			dev_dbg(g_ipu_dev, "try ipu ext di clk\n");
+-			rounded_pixel_clk = pixel_clk * 2;
+-			while (rounded_pixel_clk < 150000000)
+-				rounded_pixel_clk += pixel_clk * 2;
+-			clk_set_rate(di_parent, rounded_pixel_clk);
+-			rounded_pixel_clk =
+-				clk_round_rate(g_di_clk[disp], pixel_clk);
+-			clk_set_rate(g_di_clk[disp], rounded_pixel_clk);
+-			clk_set_parent(g_pixel_clk[disp], g_di_clk[disp]);
++			if (clk_get_usecount(di_parent))
++				dev_warn(g_ipu_dev,
++					"ext di clk already in use, go back to internal clk\n");
++			else {
++				rounded_pixel_clk = pixel_clk * 2;
++				while (rounded_pixel_clk < 150000000)
++					rounded_pixel_clk += pixel_clk * 2;
++				clk_set_rate(di_parent, rounded_pixel_clk);
++				rounded_pixel_clk =
++					clk_round_rate(g_di_clk[disp], pixel_clk);
++				clk_set_rate(g_di_clk[disp], rounded_pixel_clk);
++				clk_set_parent(g_pixel_clk[disp], g_di_clk[disp]);
++			}
+ 		}
+ 	}
+ 	rounded_pixel_clk = clk_round_rate(g_pixel_clk[disp], pixel_clk);
+diff --git a/drivers/mxc/ipu3/ipu_param_mem.h b/drivers/mxc/ipu3/ipu_param_mem.h
+index fbe15f9..3a6cd62 100644
+--- a/drivers/mxc/ipu3/ipu_param_mem.h
++++ b/drivers/mxc/ipu3/ipu_param_mem.h
+@@ -224,6 +224,13 @@ static inline void _ipu_ch_param_init(int ch,
+ 
+ 		_ipu_ch_params_set_packing(&params, 8, 16, 8, 8, 8, 0, 8, 24);
+ 		break;
++	case IPU_PIX_FMT_VYU444:
++		ipu_ch_param_set_field(&params, 0, 107, 3, 1);	/* bits/pixel */
++		ipu_ch_param_set_field(&params, 1, 85, 4, 7);	/* pix format */
++		ipu_ch_param_set_field(&params, 1, 78, 7, 19);	/* burst size */
++
++		_ipu_ch_params_set_packing(&params, 8, 8, 8, 0, 8, 16, 8, 24);
++		break;
+ 	case IPU_PIX_FMT_BGRA32:
+ 	case IPU_PIX_FMT_BGR32:
+ 		ipu_ch_param_set_field(&params, 0, 107, 3, 0);	/* bits/pixel */
+diff --git a/include/linux/ipu.h b/include/linux/ipu.h
+index 64428ab..debe441 100644
+--- a/include/linux/ipu.h
++++ b/include/linux/ipu.h
+@@ -126,6 +126,7 @@ typedef enum {
+ #define IPU_PIX_FMT_VYUY    fourcc('V', 'Y', 'U', 'Y')  /*!< 16 VYYU 4:2:2 */
+ #define IPU_PIX_FMT_Y41P    fourcc('Y', '4', '1', 'P')	/*!< 12 YUV 4:1:1 */
+ #define IPU_PIX_FMT_YUV444  fourcc('Y', '4', '4', '4')	/*!< 24 YUV 4:4:4 */
++#define IPU_PIX_FMT_VYU444  fourcc('V', '4', '4', '4')	/*!< 24 VYU 4:4:4 */
+ /* two planes -- one Y, one Cb + Cr interleaved  */
+ #define IPU_PIX_FMT_NV12    fourcc('N', 'V', '1', '2') /* 12  Y/CbCr 4:2:0  */
+ /*! @} */
+-- 
+1.5.4.4
+

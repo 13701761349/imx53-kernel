@@ -1,0 +1,117 @@
+From df2e19c0588129456db8cc38ceeab7a20e5d6727 Mon Sep 17 00:00:00 2001
+From: Zeng Zhaoming <b32542@freescale.com>
+Date: Thu, 4 Aug 2011 03:14:00 +0800
+Subject: [PATCH] ENGR00154300-1 SDMA: Fix Mx53 ASRC not works with SSI
+
+The following case not works in mx53:
+memory --> asrc --> ssi
+
+It is partly caused by asrc --> ssi using per_2_per sdma script
+to transfer data. And this script not works in sdma driver.
+
+In the per_2_per script, two sdma events trigger one channel, the
+watermark level setting different from ordinary sdma script, we need
+to set two watermark levels and map each watermark to event one-by-one.
+
+Signed-off-by: Zeng Zhaoming <b32542@freescale.com>
+---
+ arch/arm/mach-mx5/dma.c               |    6 +++---
+ arch/arm/plat-mxc/include/mach/sdma.h |    4 ++--
+ arch/arm/plat-mxc/sdma/sdma.c         |   19 +++++++++++++++----
+ 3 files changed, 20 insertions(+), 9 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/dma.c b/arch/arm/mach-mx5/dma.c
+index 4164942..ba86d87 100644
+--- a/arch/arm/mach-mx5/dma.c
++++ b/arch/arm/mach-mx5/dma.c
+@@ -986,8 +986,8 @@ static mxc_sdma_channel_ext_params_t mxc_sdma_asrca_ssi2_tx0_params = {
+ 				       SSI2_BASE_ADDR + MXC_SSI_TX0_REG,
+ 				       .peripheral_type = ASRC,
+ 				       .transfer_type = per_2_per,
+-				       .event_id = DMA_REQ_SSI2_TX1,
+-				       .event_id2 = DMA_REQ_ASRC_DMA4,
++				       .event_id2 = DMA_REQ_SSI2_TX1,
++				       .event_id = DMA_REQ_ASRC_DMA4,
+ 				       .bd_number = 32,
+ 				       .word_size = TRANSFER_32BIT,
+ 				       .ext = 1,
+@@ -1671,7 +1671,7 @@ static void __init mx53_sdma_get_script_info(sdma_script_start_addrs *sdma_scrip
+ 	sdma_script_addr->mxc_sdma_mcu_2_ssish_addr = mcu_2_ssish_ADDR_MX53;
+ 	sdma_script_addr->mxc_sdma_ssish_2_mcu_addr = ssish_2_mcu_ADDR_MX53;
+ #endif
+-
++	sdma_script_addr->mxc_sdma_per_2_per_addr = p_2_p_ADDR_MX53;
+ 	/* core */
+ 	sdma_script_addr->mxc_sdma_start_addr = (unsigned short *)sdma_code_mx53;
+ 	sdma_script_addr->mxc_sdma_ram_code_start_addr = RAM_CODE_START_ADDR_MX53;
+diff --git a/arch/arm/plat-mxc/include/mach/sdma.h b/arch/arm/plat-mxc/include/mach/sdma.h
+index d134d9d..eee4970 100644
+--- a/arch/arm/plat-mxc/include/mach/sdma.h
++++ b/arch/arm/plat-mxc/include/mach/sdma.h
+@@ -1,6 +1,6 @@
+ 
+ /*
+- * Copyright 2004-2010 Freescale Semiconductor, Inc. All Rights Reserved.
++ * Copyright 2004-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+  */
+ 
+ /*
+@@ -72,7 +72,7 @@
+ #define SDMA_ASRC_P2P_INFO_SPDIF (1 << 10)
+ #define SDMA_ASRC_P2P_INFO_SP (1 << 11)
+ #define SDMA_ASRC_P2P_INFO_DP (1 << 12)
+-#define SDMA_ASRC_P2P_INFO_HWML_OFF 14
++#define SDMA_ASRC_P2P_INFO_HWML_OFF 16
+ #define SDMA_ASRC_P2P_INFO_HWML_MASK ((1 << 10) - 1)
+ #define SDMA_ASRC_P2P_INFO_LWE (1 << 28)
+ #define SDMA_ASRC_P2P_INFO_HWE (1 << 29)
+diff --git a/arch/arm/plat-mxc/sdma/sdma.c b/arch/arm/plat-mxc/sdma/sdma.c
+index 04be666..ef455b1 100644
+--- a/arch/arm/plat-mxc/sdma/sdma.c
++++ b/arch/arm/plat-mxc/sdma/sdma.c
+@@ -468,6 +468,7 @@ static inline int sdma_asrc_set_info(dma_channel_params *p,
+ 			return wml;
+ 		wml1 = p->watermark_level;
+ 		wml2 = ep->watermark_level2;
++		/* asrc watermake is set as per channel */
+ 		if (info->channs) {
+ 			wml |= (info->channs & SDMA_ASRC_INFO_N_MASK) <<
+ 			    SDMA_ASRC_INFO_N_OFF;
+@@ -476,7 +477,11 @@ static inline int sdma_asrc_set_info(dma_channel_params *p,
+ 			else
+ 				wml1 *= info->channs & SDMA_ASRC_INFO_N_MASK;
+ 		}
++
+ 		if (info->channs & 1) {
++			wml |= (info->channs & SDMA_ASRC_INFO_N_MASK) <<
++			    SDMA_ASRC_INFO_N_OFF;
++
+ 			if (ep->p2p_dir)
+ 				wml |= SDMA_ASRC_P2P_INFO_PS;
+ 			else
+@@ -584,12 +589,18 @@ static int sdma_load_context(int channel, dma_channel_params *p)
+ 				}
+ 			}
+ 
+-			if (p->ext)
++			if (p->ext && p->peripheral_type == ASRC) {
+ 				context.wml = ep->info_bits;
+-			/* Watermark Level */
+-			context.wml |= event2_greater_than_32 |
+-				event1_greater_than_32 | p->watermark_level;
+ 
++				context.wml |= sdma_asrc_set_info(p,
++						&context,
++						event2_greater_than_32 |
++						event1_greater_than_32);
++			} else {
++				/* Watermark Level */
++				context.wml |= event2_greater_than_32 |
++				event1_greater_than_32 | p->watermark_level;
++			}
+ 			/* Address */
+ 			context.shp_addr = (unsigned long)(p->per_address);
+ 			if (p->ext)
+-- 
+1.5.4.4
+

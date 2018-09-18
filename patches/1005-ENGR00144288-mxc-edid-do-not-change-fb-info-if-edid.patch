@@ -1,0 +1,78 @@
+From d9f8f98559960a2d86586574661b81964d918eae Mon Sep 17 00:00:00 2001
+From: Jason Chen <b02280@freescale.com>
+Date: Tue, 31 May 2011 16:54:51 +0800
+Subject: [PATCH] ENGR00144288 mxc edid: do not change fb info if edid no change
+
+do not change fb info if edid no change
+
+Signed-off-by: Jason Chen <b02280@freescale.com>
+---
+ drivers/video/mxc/mxc_edid.c |   27 +++++++++++++++------------
+ 1 files changed, 15 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/video/mxc/mxc_edid.c b/drivers/video/mxc/mxc_edid.c
+index 09159b9..380e762 100644
+--- a/drivers/video/mxc/mxc_edid.c
++++ b/drivers/video/mxc/mxc_edid.c
+@@ -395,24 +395,30 @@ static void det_worker(struct work_struct *work)
+ 
+ 	/* cable connection changes */
+ 	if (mxc_ddc.update()) {
++		u8 edid_old[MXC_EDID_LENGTH];
+ 		mxc_ddc.cable_plugin = 1;
+ 		sprintf(event_string, "EVENT=plugin");
+ 
+-		/* make sure fb is powerdown */
+-		acquire_console_sem();
+-		fb_blank(mxc_ddc.fbi, FB_BLANK_POWERDOWN);
+-		release_console_sem();
++		memcpy(edid_old, mxc_ddc.edid, MXC_EDID_LENGTH);
+ 
+ 		if (mxc_edid_read(mxc_ddc.client->adapter, mxc_ddc.client->addr,
+ 				mxc_ddc.edid, &mxc_ddc.edid_cfg, mxc_ddc.fbi) < 0)
+ 			dev_err(&mxc_ddc.client->dev,
+ 					"MXC ddc: read edid fail\n");
+ 		else {
+-			if (mxc_ddc.fbi->monspecs.modedb_len > 0) {
++			if (!memcmp(edid_old, mxc_ddc.edid, MXC_EDID_LENGTH))
++				dev_info(&mxc_ddc.client->dev,
++					"Sii902x: same edid\n");
++			else if (mxc_ddc.fbi->monspecs.modedb_len > 0) {
+ 				int i;
+ 				const struct fb_videomode *mode;
+ 				struct fb_videomode m;
+ 
++				/* make sure fb is powerdown */
++				acquire_console_sem();
++				fb_blank(mxc_ddc.fbi, FB_BLANK_POWERDOWN);
++				release_console_sem();
++
+ 				fb_destroy_modelist(&mxc_ddc.fbi->modelist);
+ 
+ 				for (i = 0; i < mxc_ddc.fbi->monspecs.modedb_len; i++)
+@@ -433,18 +439,15 @@ static void det_worker(struct work_struct *work)
+ 				fb_set_var(mxc_ddc.fbi, &mxc_ddc.fbi->var);
+ 				mxc_ddc.fbi->flags &= ~FBINFO_MISC_USEREVENT;
+ 				release_console_sem();
+-			}
+ 
+-			acquire_console_sem();
+-			fb_blank(mxc_ddc.fbi, FB_BLANK_UNBLANK);
+-			release_console_sem();
++				acquire_console_sem();
++				fb_blank(mxc_ddc.fbi, FB_BLANK_UNBLANK);
++				release_console_sem();
++			}
+ 		}
+ 	} else {
+ 		mxc_ddc.cable_plugin = 0;
+ 		sprintf(event_string, "EVENT=plugout");
+-		acquire_console_sem();
+-		fb_blank(mxc_ddc.fbi, FB_BLANK_POWERDOWN);
+-		release_console_sem();
+ 	}
+ 
+ 	kobject_uevent_env(&mxc_ddc.pdev->dev.kobj, KOBJ_CHANGE, envp);
+-- 
+1.5.4.4
+

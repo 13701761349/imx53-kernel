@@ -1,0 +1,110 @@
+From 38eb305319816af032eb91bcc420108afc240af1 Mon Sep 17 00:00:00 2001
+From: Peter Chen <peter.chen@freescale.com>
+Date: Wed, 24 Aug 2011 15:00:49 +0800
+Subject: [PATCH] ENGR00144145-1 usb: can be built as loadable modules
+
+MSL part
+
+Follow below load sequence to use OTG
+
+- fsl_otg_arc
+- ehci-hcd
+- arcotg_udc
+
+Besides, in order to match i.mx53 release windows, it changes some
+common code, there will be a better solution at 2.6.38 in future
+
+Signed-off-by: Peter Chen <peter.chen@freescale.com>
+---
+ arch/arm/mach-mx5/usb_dr.c     |    2 +-
+ arch/arm/mach-mx5/usb_h1.c     |    9 +--------
+ arch/arm/mach-mx5/usb_h2.c     |    8 +-------
+ arch/arm/plat-mxc/usb_common.c |    6 ++++++
+ 4 files changed, 9 insertions(+), 16 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/usb_dr.c b/arch/arm/mach-mx5/usb_dr.c
+index 183a782..30eb799 100644
+--- a/arch/arm/mach-mx5/usb_dr.c
++++ b/arch/arm/mach-mx5/usb_dr.c
+@@ -225,7 +225,7 @@ static void host_wakeup_handler(struct fsl_usb2_platform_data *pdata)
+ {
+ 	_host_wakeup_enable(pdata, false);
+ 	_host_phy_lowpower_suspend(pdata, false);
+-	fsl_usb_recover_hcd(&mxc_usbdr_host_device);
++	pdata->wakeup_event = 1;
+ }
+ /* End of host related operation for DR port */
+ #endif /* CONFIG_USB_EHCI_ARC_OTG */
+diff --git a/arch/arm/mach-mx5/usb_h1.c b/arch/arm/mach-mx5/usb_h1.c
+index 197947c..0179567 100644
+--- a/arch/arm/mach-mx5/usb_h1.c
++++ b/arch/arm/mach-mx5/usb_h1.c
+@@ -28,13 +28,6 @@ static struct clk *usb_phy2_clk;
+ static struct clk *usb_oh3_clk;
+ static struct clk *usb_ahb_clk;
+ extern int clk_get_usecount(struct clk *clk);
+-
+-#ifdef CONFIG_USB_EHCI_ARC
+-extern void fsl_usb_recover_hcd(struct platform_device *pdev);
+-#else
+-static void fsl_usb_recover_hcd(struct platform_device *pdev)
+-{; }
+-#endif
+ /*
+  * USB Host1 HS port
+  */
+@@ -127,7 +120,7 @@ static void h1_wakeup_handler(struct fsl_usb2_platform_data *pdata)
+ {
+ 	_wake_up_enable(pdata, false);
+ 	_phy_lowpower_suspend(pdata, false);
+-	fsl_usb_recover_hcd(&mxc_usbh1_device);
++	pdata->wakeup_event = 1;
+ }
+ 
+ static void usbh1_wakeup_event_clear(void)
+diff --git a/arch/arm/mach-mx5/usb_h2.c b/arch/arm/mach-mx5/usb_h2.c
+index 516c62d..4ba2977 100644
+--- a/arch/arm/mach-mx5/usb_h2.c
++++ b/arch/arm/mach-mx5/usb_h2.c
+@@ -22,12 +22,6 @@
+ #include "iomux.h"
+ #include "mx51_pins.h"
+ 
+-#ifdef CONFIG_USB_EHCI_ARC
+-extern void fsl_usb_recover_hcd(struct platform_device *pdev);
+-#else
+-static void fsl_usb_recover_hcd(struct platform_device *pdev)
+-{; }
+-#endif
+ /*
+  * USB Host2 HS port
+  */
+@@ -109,7 +103,7 @@ static void h2_wakeup_handler(struct fsl_usb2_platform_data *pdata)
+ {
+ 	_wake_up_enable(pdata, false);
+ 	_phy_lowpower_suspend(pdata, false);
+-	fsl_usb_recover_hcd(&mxc_usbh2_device);
++	pdata->wakeup_event = 1;
+ }
+ 
+ static void usbh2_wakeup_event_clear(void)
+diff --git a/arch/arm/plat-mxc/usb_common.c b/arch/arm/plat-mxc/usb_common.c
+index 69cbcfc..cd382f2 100644
+--- a/arch/arm/plat-mxc/usb_common.c
++++ b/arch/arm/plat-mxc/usb_common.c
+@@ -868,6 +868,12 @@ void usbotg_uninit(struct fsl_usb2_platform_data *pdata)
+ 		if (pdata->xcvr_type == PORTSC_PTS_SERIAL)
+ 			clk_disable(usb_clk);
+ 		clk_disable(usb_ahb_clk);
++	/* FIXME workaround for clock refcounf when load/unload usb module
++	 * Need to fix it in future
++	 */
++	#ifdef CONFIG_USB_OTG
++		clk_disable(usb_ahb_clk);
++	#endif
+ 	}
+ }
+ EXPORT_SYMBOL(usbotg_uninit);
+-- 
+1.5.4.4
+

@@ -1,0 +1,66 @@
+From 1029987d622c01fca2efe2f7a86be026e38b595b Mon Sep 17 00:00:00 2001
+From: Lily Zhang <r58066@freescale.com>
+Date: Tue, 14 Jun 2011 20:46:08 +0800
+Subject: [PATCH] ENGR00151476-2 ipu,mc13892,gps: remove build warning message
+
+Remove build warning message from ipu, mc13892 and gps drivers
+
+Signed-off-by: Lily Zhang <r58066@freescale.com>
+---
+ drivers/mxc/gps_ioctrl/agpsgpiodev.c |    4 ++--
+ drivers/mxc/pmic/mc13892/pmic_adc.c  |    2 +-
+ drivers/video/mxc/mxc_ipuv3_fb.c     |    4 ++--
+ 3 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/mxc/gps_ioctrl/agpsgpiodev.c b/drivers/mxc/gps_ioctrl/agpsgpiodev.c
+index 9b2afef..b3f192e 100644
+--- a/drivers/mxc/gps_ioctrl/agpsgpiodev.c
++++ b/drivers/mxc/gps_ioctrl/agpsgpiodev.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright 2008-2010 Freescale Semiconductor, Inc. All Rights Reserved.
++ * Copyright 2008-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+  */
+ 
+ /*
+@@ -217,7 +217,7 @@ void cleanup_chrdev(void)
+  *
+  * @return              0 on success, -1 otherwise.
+  */
+-static int __init gps_ioctrl_probe(struct platform_device *pdev)
++static int __devinit gps_ioctrl_probe(struct platform_device *pdev)
+ {
+ 	struct regulator *gps_regu;
+ 
+diff --git a/drivers/mxc/pmic/mc13892/pmic_adc.c b/drivers/mxc/pmic/mc13892/pmic_adc.c
+index 074ff5f..9df2da0 100644
+--- a/drivers/mxc/pmic/mc13892/pmic_adc.c
++++ b/drivers/mxc/pmic/mc13892/pmic_adc.c
+@@ -228,7 +228,7 @@ static unsigned channel_num[] = {
+ 
+ static bool pmic_adc_ready;
+ 
+-int is_mc13892_adc_ready()
++int is_mc13892_adc_ready(void)
+ {
+ 	return pmic_adc_ready;
+ }
+diff --git a/drivers/video/mxc/mxc_ipuv3_fb.c b/drivers/video/mxc/mxc_ipuv3_fb.c
+index e474d8f..63edf10 100644
+--- a/drivers/video/mxc/mxc_ipuv3_fb.c
++++ b/drivers/video/mxc/mxc_ipuv3_fb.c
+@@ -1678,9 +1678,9 @@ static int mxcfb_setup(struct fb_info *fbi, struct platform_device *pdev)
+ 
+ 	if (mxcfbi->fb_mode_str) {
+ 		if (mxcfbi->ipu_di >= 0) {
+-			const struct fb_videomode *mode;
++			const struct fb_videomode *mode = NULL;
+ 			struct fb_videomode m;
+-			int num, found = 0;
++			int num = 0, found = 0;
+ 
+ 			dev_dbg(fbi->device, "Config display port %d\n",
+ 					mxcfbi->ipu_di);
+-- 
+1.5.4.4
+

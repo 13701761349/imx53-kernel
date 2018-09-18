@@ -1,0 +1,59 @@
+From f0ec8153b42c87b0d7370f21aa8bf983605d2d28 Mon Sep 17 00:00:00 2001
+From: Ranjani Vaidyanathan <ra5478@freescale.com>
+Date: Tue, 26 Jul 2011 13:43:51 -0500
+Subject: [PATCH] ENGR00153728: Fix MX25, MX31 build break caused by ENGR00153576
+
+Fix build break for non-mx5x platforms
+
+Signed-off-by: Ranjani Vaidyanathan <ra5478@freescale.com>
+---
+ arch/arm/plat-mxc/clock.c |    7 ++++---
+ 1 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm/plat-mxc/clock.c b/arch/arm/plat-mxc/clock.c
+index 858e1d4..3e8347e 100644
+--- a/arch/arm/plat-mxc/clock.c
++++ b/arch/arm/plat-mxc/clock.c
+@@ -181,6 +181,7 @@ int clk_enable(struct clk *clk)
+ 	if (clk == NULL || IS_ERR(clk))
+ 		return -EINVAL;
+ 
++#ifdef CONFIG_ARCH_MX5
+ 	spin_lock_irqsave(&clockfw_lock, flags);
+ 
+ 	if (clk->flags & AHB_HIGH_SET_POINT)
+@@ -192,7 +193,6 @@ int clk_enable(struct clk *clk)
+ 
+ 	if ((clk->flags & CPU_FREQ_TRIG_UPDATE)
+ 			&& (clk_get_usecount(clk) == 0)) {
+-#if (defined(CONFIG_ARCH_MX5) || defined(CONFIG_ARCH_MX37))
+ 		if (!(clk->flags &
+ 			(AHB_HIGH_SET_POINT | AHB_MED_SET_POINT)))  {
+ 			if (low_freq_bus_used() && !low_bus_freq_mode)
+@@ -209,8 +209,8 @@ int clk_enable(struct clk *clk)
+ 				  */
+ 				set_high_bus_freq(1);
+ 		}
+-#endif
+ 	}
++#endif
+ 
+ 	spin_lock_irqsave(&clockfw_lock, flags);
+ 
+@@ -243,11 +243,12 @@ void clk_disable(struct clk *clk)
+ 
+ 	__clk_disable(clk);
+ 
++#ifdef CONFIG_ARCH_MX5
+ 	if (clk->flags & AHB_HIGH_SET_POINT)
+ 		lp_high_freq--;
+ 	else if (clk->flags & AHB_MED_SET_POINT)
+ 		lp_med_freq--;
+-
++#endif
+ 	spin_unlock_irqrestore(&clockfw_lock, flags);
+ 
+ 	if ((clk->flags & CPU_FREQ_TRIG_UPDATE)
+-- 
+1.5.4.4
+

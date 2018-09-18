@@ -1,0 +1,116 @@
+From 92b5fd3c7cfb9084b54860daef89f7c4c95126ae Mon Sep 17 00:00:00 2001
+From: Robin Gong <B38343@freescale.com>
+Date: Mon, 29 Aug 2011 16:17:37 +0800
+Subject: [PATCH] ENGR00155472 mx53_loco: support for RevB and RevA of Ripely mx53_loco
+
+in board_init ,kernel will read the system_rev TAG from uboot
+and configure the right interrupt gpio
+Signed-off-by: Robin Gong <B38343@freescale.com>
+---
+ arch/arm/mach-mx5/mx53_loco.c              |   20 ++++++++++++++------
+ arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c |    4 ++--
+ arch/arm/mach-mx5/pmic.h                   |    2 +-
+ arch/arm/plat-mxc/include/mach/hardware.h  |    3 ++-
+ 4 files changed, 19 insertions(+), 10 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx53_loco.c b/arch/arm/mach-mx5/mx53_loco.c
+index a8f22f5..301ea1b 100644
+--- a/arch/arm/mach-mx5/mx53_loco.c
++++ b/arch/arm/mach-mx5/mx53_loco.c
+@@ -106,7 +106,8 @@
+ #define USER_LED_EN			(6*32 + 7)	/* GPIO_7_7 */
+ #define USB_PWREN			(6*32 + 8)	/* GPIO_7_8 */
+ #define NIRQ				(6*32 + 11)	/* GPIO7_11 */
+-#define MX53_LOCO_MC34708_IRQ    (4*32 + 30)	/* GPIO5_30 CSI0_DAT12 */
++#define MX53_LOCO_MC34708_IRQ_REVA    (4*32 + 30)	/* GPIO5_30 */
++#define MX53_LOCO_MC34708_IRQ_REVB    (4*32 + 23)	/* GPIO5_23 */
+ 
+ #define MX53_OFFSET					(0x20000000)
+ #define TZIC_WAKEUP0_OFFSET         (0x0E00)
+@@ -116,6 +117,7 @@
+ #define GPIO7_0_11_IRQ_BIT			(0x1<<11)
+ 
+ extern void pm_i2c_init(u32 base_addr);
++static u32 mx53_loco_mc34708_irq;
+ static iomux_v3_cfg_t mx53_loco_pads[] = {
+ 	/* FEC */
+ 	MX53_PAD_FEC_MDC__FEC_MDC,
+@@ -859,7 +861,7 @@ static void __init mx53_loco_io_init(void)
+ static void __init mxc_board_init(void)
+ {
+ 
+-	iomux_v3_cfg_t mc34708_int;
++	iomux_v3_cfg_t mc34708_int = MX53_PAD_CSI0_DAT12__GPIO5_30;
+ 	iomux_v3_cfg_t da9052_csi0_d12;
+ 
+ 	mxc_ipu_data.di_clk[0] = clk_get(NULL, "ipu_di0_clk");
+@@ -882,11 +884,17 @@ static void __init mxc_board_init(void)
+ 
+     if (board_is_mx53_loco_mc34708()) {
+ 		/* set pmic INT gpio pin */
+-		mc34708_int = MX53_PAD_CSI0_DAT12__GPIO5_30;
++		if (board_is_rev(BOARD_REV_2)) {/*Board rev A*/
++			mc34708_int = MX53_PAD_CSI0_DAT12__GPIO5_30;
++			mx53_loco_mc34708_irq = MX53_LOCO_MC34708_IRQ_REVA;
++		} else if (board_is_rev(BOARD_REV_4)) {/*Board rev B*/
++			mc34708_int = MX53_PAD_CSI0_DAT5__GPIO5_23;
++			mx53_loco_mc34708_irq = MX53_LOCO_MC34708_IRQ_REVB;
++		}
+ 		mxc_iomux_v3_setup_pad(mc34708_int);
+-		gpio_request(MX53_LOCO_MC34708_IRQ, "pmic-int");
+-		gpio_direction_input(MX53_LOCO_MC34708_IRQ);
+-		mx53_loco_init_mc34708();
++		gpio_request(mx53_loco_mc34708_irq, "pmic-int");
++		gpio_direction_input(mx53_loco_mc34708_irq);
++		mx53_loco_init_mc34708(mx53_loco_mc34708_irq);
+ 		dvfs_core_data.reg_id = "SW1A";
+ 		tve_data.dac_reg = "VDAC";
+ 		bus_freq_data.gp_reg_id = "SW1A";
+diff --git a/arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c b/arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c
+index f2cb518..b2572b5 100644
+--- a/arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c
++++ b/arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c
+@@ -312,11 +312,11 @@ static struct mc34708_platform_data mc34708_plat = {
+ 
+ static struct i2c_board_info __initdata mc34708_i2c_device = {
+ 	I2C_BOARD_INFO(MC34708_I2C_DEVICE_NAME, MC34708_I2C_ADDR),
+-	.irq = gpio_to_irq(MX53_LOCO_MC34708_IRQ),
+ 	.platform_data = &mc34708_plat,
+ };
+ 
+-int __init mx53_loco_init_mc34708(void)
++int __init mx53_loco_init_mc34708(u32 int_gpio)
+ {
++	mc34708_i2c_device.irq = gpio_to_irq(int_gpio);/*update INT gpio*/
+ 	return i2c_register_board_info(0, &mc34708_i2c_device, 1);
+ }
+diff --git a/arch/arm/mach-mx5/pmic.h b/arch/arm/mach-mx5/pmic.h
+index fd347f1..a398a4f 100644
+--- a/arch/arm/mach-mx5/pmic.h
++++ b/arch/arm/mach-mx5/pmic.h
+@@ -20,7 +20,7 @@
+ #define __ASM_ARCH_MACH_PMIC_H__
+ 
+ extern int __init mx53_loco_init_da9052(void);
+-extern int __init mx53_loco_init_mc34708(void);
++extern int __init mx53_loco_init_mc34708(u32 int_gpio);
+ extern int da9053_suspend_cmd_sw(void);
+ extern int da9053_suspend_cmd_hw(void);
+ extern int da9053_restore_volt_settings(void);
+diff --git a/arch/arm/plat-mxc/include/mach/hardware.h b/arch/arm/plat-mxc/include/mach/hardware.h
+index 4106de8..5effc02 100644
+--- a/arch/arm/plat-mxc/include/mach/hardware.h
++++ b/arch/arm/plat-mxc/include/mach/hardware.h
+@@ -93,7 +93,8 @@ extern unsigned int system_rev;
+ 
+ #ifdef CONFIG_ARCH_MX5
+ #define board_is_mx53_loco_mc34708() \
+-  (cpu_is_mx53() &&  board_is_rev(BOARD_REV_2))
++  (cpu_is_mx53() &&  (board_is_rev(BOARD_REV_2) || board_is_rev(BOARD_REV_4)))
++/*BOARD_REV_2: revA,BOARD_REV_4: revB*/
+ #define board_is_mx53_arm2()  (cpu_is_mx53() && board_is_rev(BOARD_REV_2))
+ #define board_is_mx53_evk_a() (cpu_is_mx53() && board_is_rev(BOARD_REV_1))
+ #define board_is_mx53_evk_b() (cpu_is_mx53() && board_is_rev(BOARD_REV_3))
+-- 
+1.5.4.4
+

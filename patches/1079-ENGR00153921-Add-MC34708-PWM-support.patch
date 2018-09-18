@@ -1,0 +1,451 @@
+From c20f3bc3abb98e7d141d7e255b81b66a5b4b6293 Mon Sep 17 00:00:00 2001
+From: Robby Cai <R63905@freescale.com>
+Date: Fri, 29 Jul 2011 13:33:09 +0800
+Subject: [PATCH] ENGR00153921 Add MC34708 PWM support
+
+This driver privides dedicated APIs similar to ones provided
+by Linux PWM framework.
+
+MC34708 PWM supports period of time from 16000 ns to 1024000 ns,
+with the step of 16000 ns. The duty cycle is multiple of 1/32.
+
+Signed-off-by: Robby Cai <R63905@freescale.com>
+---
+ drivers/mxc/pmic/core/pmic_core_i2c.c   |   14 ++
+ drivers/mxc/pmic/core/pmic_core_spi.c   |   14 ++
+ drivers/mxc/pmic/mc34708/Kconfig        |    8 +
+ drivers/mxc/pmic/mc34708/Makefile       |    1 +
+ drivers/mxc/pmic/mc34708/mc34708_pwm.c  |  243 +++++++++++++++++++++++++++++++
+ include/linux/mfd/mc34708/mc34708_pwm.h |   53 +++++++
+ 6 files changed, 333 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/mxc/pmic/core/pmic_core_i2c.c b/drivers/mxc/pmic/core/pmic_core_i2c.c
+index c839cb9..77530c4 100644
+--- a/drivers/mxc/pmic/core/pmic_core_i2c.c
++++ b/drivers/mxc/pmic/core/pmic_core_i2c.c
+@@ -94,6 +94,14 @@ static struct platform_device bleds_ldm = {
+ 	.name = "pmic_leds",
+ 	.id = 'b',
+ };
++static struct platform_device pwm1_ldm = {
++	.name = "pmic_pwm",
++	.id = 0,
++};
++static struct platform_device pwm2_ldm = {
++	.name = "pmic_pwm",
++	.id = 1,
++};
+ 
+ enum pmic_id {
+ 	PMIC_ID_MC13892,
+@@ -175,6 +183,8 @@ static void pmic_pdev_register(struct device *dev)
+ 	platform_device_register(&rleds_ldm);
+ 	platform_device_register(&gleds_ldm);
+ 	platform_device_register(&bleds_ldm);
++	platform_device_register(&pwm1_ldm);
++	platform_device_register(&pwm2_ldm);
+ }
+ 
+ /*!
+@@ -188,6 +198,8 @@ static void pmic_pdev_unregister(void)
+ 	platform_device_unregister(&rtc_ldm);
+ 	platform_device_unregister(&power_ldm);
+ 	platform_device_unregister(&light_ldm);
++	platform_device_unregister(&pwm1_ldm);
++	platform_device_unregister(&pwm2_ldm);
+ }
+ 
+ static int __devinit is_chip_onboard(struct i2c_client *client)
+@@ -285,6 +297,8 @@ static int __devinit pmic_probe(struct i2c_client *client,
+ 	battery_ldm.name = get_client_device_name(name, "%s_battery");
+ 	light_ldm.name = get_client_device_name(name, "%s_light");
+ 	rtc_ldm.name = get_client_device_name(name, "%s_rtc");
++	pwm1_ldm.name = get_client_device_name(name, "%s_pwm");
++	pwm2_ldm.name = get_client_device_name(name, "%s_pwm");
+ 
+ 	i2c_set_clientdata(client,
+ 		pmic_internal[pmic_index].pmic_alloc_data(&client->dev));
+diff --git a/drivers/mxc/pmic/core/pmic_core_spi.c b/drivers/mxc/pmic/core/pmic_core_spi.c
+index 70212ae..fcb2c0a 100644
+--- a/drivers/mxc/pmic/core/pmic_core_spi.c
++++ b/drivers/mxc/pmic/core/pmic_core_spi.c
+@@ -87,6 +87,14 @@ static struct platform_device bleds_ldm = {
+ 	.name = "pmic_leds",
+ 	.id = 'b',
+ };
++static struct platform_device pwm1_ldm = {
++	.name = "pmic_pwm",
++	.id = 0,
++};
++static struct platform_device pwm2_ldm = {
++	.name = "pmic_pwm",
++	.id = 1,
++};
+ 
+ enum pmic_id {
+ 	PMIC_ID_MC13892,
+@@ -159,6 +167,8 @@ static void pmic_pdev_register(void)
+ 	platform_device_register(&rleds_ldm);
+ 	platform_device_register(&gleds_ldm);
+ 	platform_device_register(&bleds_ldm);
++	platform_device_register(&pwm1_ldm);
++	platform_device_register(&pwm2_ldm);
+ }
+ 
+ /*!
+@@ -172,6 +182,8 @@ static void pmic_pdev_unregister(void)
+ 	platform_device_unregister(&rtc_ldm);
+ 	platform_device_unregister(&power_ldm);
+ 	platform_device_unregister(&light_ldm);
++	platform_device_unregister(&pwm1_ldm);
++	platform_device_unregister(&pwm2_ldm);
+ }
+ 
+ /*!
+@@ -232,6 +244,8 @@ static int __devinit pmic_probe(struct spi_device *spi)
+ 	battery_ldm.name = get_client_device_name(name, "%s_battery");
+ 	light_ldm.name = get_client_device_name(name, "%s_light");
+ 	rtc_ldm.name = get_client_device_name(name, "%s_rtc");
++	pwm1_ldm.name = get_client_device_name(name, "%s_pwm");
++	pwm2_ldm.name = get_client_device_name(name, "%s_pwm");
+ 
+ 	/* Initialize the PMIC event handling */
+ 	pmic_event_list_init();
+diff --git a/drivers/mxc/pmic/mc34708/Kconfig b/drivers/mxc/pmic/mc34708/Kconfig
+index 612ebdb..a1633cf 100644
+--- a/drivers/mxc/pmic/mc34708/Kconfig
++++ b/drivers/mxc/pmic/mc34708/Kconfig
+@@ -25,3 +25,11 @@ config MXC_MC34708_BATTERY
+ 	This is the MC34708 battery module driver. This module provides kernel API
+ 	for battery control part of MC34708.
+ 	If you want MC34708 battery support, you should say Y here
++
++config MXC_MC34708_PWM
++	tristate "MC34708 PWM API support"
++	depends on MXC_PMIC_MC34708
++	---help---
++	This is the MC34708 PWM module driver. This module provides kernel API
++	for PWM control part of MC34708.
++	If you want MC34708 PWM support, you should say Y here
+diff --git a/drivers/mxc/pmic/mc34708/Makefile b/drivers/mxc/pmic/mc34708/Makefile
+index 6e1c907..9e6a91d 100644
+--- a/drivers/mxc/pmic/mc34708/Makefile
++++ b/drivers/mxc/pmic/mc34708/Makefile
+@@ -6,5 +6,6 @@ obj-$(CONFIG_MXC_MC34708_ADC) += mc34708_adc.o
+ #obj-$(CONFIG_MXC_MC34708_RTC) += mc34708_rtc.o
+ obj-$(CONFIG_MXC_MC34708_LIGHT) += mc34708_light.o
+ obj-$(CONFIG_MXC_MC34708_BATTERY) += mc34708_battery.o
++obj-$(CONFIG_MXC_MC34708_PWM) += mc34708_pwm.o
+ #obj-$(CONFIG_MXC_MC34708_CONNECTIVITY) += mc34708_convity.o
+ #obj-$(CONFIG_MXC_MC34708_POWER) += mc34708_power.o
+diff --git a/drivers/mxc/pmic/mc34708/mc34708_pwm.c b/drivers/mxc/pmic/mc34708/mc34708_pwm.c
+new file mode 100644
+index 0000000..00b0e28
+--- /dev/null
++++ b/drivers/mxc/pmic/mc34708/mc34708_pwm.c
+@@ -0,0 +1,243 @@
++/*
++ * Copyright (C) 2011 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
++ */
++
++/*
++ * based on arch/arm/plat-mxc/pwm.c
++ */
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/err.h>
++#include <linux/pmic_status.h>
++#include <linux/pmic_external.h>
++#include <linux/mfd/mc34708/mc34708.h>
++#include <linux/mfd/mc34708/mc34708_pwm.h>
++
++#define PWM1DUTY_SHIFT		0
++#define PWM1CLKDIV_SHIFT	6
++#define PWM2DUTY_SHIFT		12
++
++#define BASE_CLK_FREQ		(2000000 / 32) /* base clk: 2MHz/32 */
++#define MAX_CLK_DIV		64
++#define PERIOD_NS_LOW_LIMIT	(1000000000 / BASE_CLK_FREQ)
++#define PERIOD_NS_HIGH_LIMIT	(PERIOD_NS_LOW_LIMIT * MAX_CLK_DIV)
++
++static DEFINE_MUTEX(pwm_lock);
++static LIST_HEAD(pwm_list);
++
++struct pwm_device {
++	struct list_head	node;
++	struct platform_device *pdev;
++	const char	*label;
++
++	unsigned int	use_count;
++	unsigned int	pwm_id;
++	unsigned int	duty_cycles;
++};
++
++int mc34708_pwm_config(struct pwm_device *pwm, int duty_ns, int period_ns)
++{
++	unsigned long long c;
++	unsigned long period_cycles;
++	u32 offset;
++
++	if (pwm == NULL || period_ns == 0 || duty_ns > period_ns)
++		return -EINVAL;
++
++	if (period_ns < PERIOD_NS_LOW_LIMIT) {
++		dev_warn(&pwm->pdev->dev,
++			"Period time LESSER than the low limit,"
++			" forced to %d ns.\n",
++			PERIOD_NS_LOW_LIMIT);
++
++		period_cycles = 1;
++		period_ns = PERIOD_NS_LOW_LIMIT;
++	} else if (period_ns > PERIOD_NS_HIGH_LIMIT) {
++		dev_warn(&pwm->pdev->dev,
++			"Period time BEYOND the high limit, forced to %d ns.\n",
++			PERIOD_NS_HIGH_LIMIT);
++
++		period_cycles = MAX_CLK_DIV;
++		period_ns = PERIOD_NS_HIGH_LIMIT;
++		if (duty_ns > period_ns)
++			duty_ns = period_ns;
++	} else {
++		c = period_ns;
++		do_div(c, 1000);
++		c = c * BASE_CLK_FREQ;
++		do_div(c, 1000000);
++		period_cycles = c;
++	}
++
++	offset = pwm->pwm_id * PWM2DUTY_SHIFT + PWM1CLKDIV_SHIFT;
++	pmic_write_reg(MC34708_REG_PWM_CTL, (period_cycles - 1) << offset,
++			0x3F << offset);
++
++	c = (unsigned long long)duty_ns * 32;
++	do_div(c, period_ns);
++	pwm->duty_cycles = c;
++
++	/* The following is for debug purpose */
++	period_ns = PERIOD_NS_LOW_LIMIT * period_cycles;
++	duty_ns = (pwm->duty_cycles == 0) ?
++			0 : (period_ns * pwm->duty_cycles / 32);
++	dev_dbg(&pwm->pdev->dev, "set duty_ns %d, period_ns %d\n",
++		duty_ns, period_ns);
++
++	return 0;
++}
++EXPORT_SYMBOL(mc34708_pwm_config);
++
++int mc34708_pwm_enable(struct pwm_device *pwm)
++{
++	int rc = 0;
++	u32 offset;
++
++	/* No dedicated {EN|DIS}ABLE bit, it's controlled by duty cycle */
++	offset = pwm->pwm_id * PWM2DUTY_SHIFT;
++	rc = pmic_write_reg(MC34708_REG_PWM_CTL, pwm->duty_cycles << offset,
++			0x3F << offset);
++	dev_dbg(&pwm->pdev->dev, "%s: duty_cycles %d\n",
++			__func__, pwm->duty_cycles);
++
++	return rc;
++}
++EXPORT_SYMBOL(mc34708_pwm_enable);
++
++void mc34708_pwm_disable(struct pwm_device *pwm)
++{
++	u32 offset;
++
++	offset = pwm->pwm_id * PWM2DUTY_SHIFT;
++	pmic_write_reg(MC34708_REG_PWM_CTL, 0, 0x3F << offset);
++
++}
++EXPORT_SYMBOL(mc34708_pwm_disable);
++
++struct pwm_device *mc34708_pwm_request(int pwm_id, const char *label)
++{
++	struct pwm_device *pwm;
++	int found = 0;
++
++	mutex_lock(&pwm_lock);
++
++	list_for_each_entry(pwm, &pwm_list, node) {
++		if (pwm->pwm_id == pwm_id) {
++			found = 1;
++			break;
++		}
++	}
++
++	if (found) {
++		if (pwm->use_count == 0) {
++			pwm->use_count++;
++			pwm->label = label;
++		} else
++			pwm = ERR_PTR(-EBUSY);
++	} else
++		pwm = ERR_PTR(-ENOENT);
++
++	mutex_unlock(&pwm_lock);
++	return pwm;
++}
++EXPORT_SYMBOL(mc34708_pwm_request);
++
++void mc34708_pwm_free(struct pwm_device *pwm)
++{
++	mutex_lock(&pwm_lock);
++
++	if (pwm->use_count) {
++		pwm->use_count--;
++		pwm->label = NULL;
++	} else
++		pr_warning("PWM device already freed\n");
++
++	mutex_unlock(&pwm_lock);
++}
++EXPORT_SYMBOL(mc34708_pwm_free);
++
++static int __devinit mc34708_pwm_probe(struct platform_device *pdev)
++{
++	struct pwm_device *pwm;
++
++	if (pdev->id != 0 && pdev->id != 1) {
++		dev_err(&pdev->dev, "pdev->id (pwm_id) should be 0 or 1,"
++			"instead of %d\n", pdev->id);
++		return -EINVAL;
++	}
++
++	pwm = kzalloc(sizeof(struct pwm_device), GFP_KERNEL);
++	if (pwm == NULL) {
++		dev_err(&pdev->dev, "failed to allocate memory\n");
++		return -ENOMEM;
++	}
++
++	pwm->use_count = 0;
++	pwm->pwm_id = pdev->id;
++	pwm->pdev = pdev;
++
++	mutex_lock(&pwm_lock);
++	list_add_tail(&pwm->node, &pwm_list);
++	mutex_unlock(&pwm_lock);
++
++	platform_set_drvdata(pdev, pwm);
++
++	return 0;
++}
++
++static int __devexit mc34708_pwm_remove(struct platform_device *pdev)
++{
++	struct pwm_device *pwm;
++
++	pwm = platform_get_drvdata(pdev);
++	if (pwm == NULL)
++		return -ENODEV;
++
++	mutex_lock(&pwm_lock);
++	list_del(&pwm->node);
++	mutex_unlock(&pwm_lock);
++
++	kfree(pwm);
++	return 0;
++}
++
++static struct platform_driver mc34708_pwm_driver = {
++	.driver		= {
++		.name	= "mc34708_pwm",
++	},
++	.probe		= mc34708_pwm_probe,
++	.remove		= __devexit_p(mc34708_pwm_remove),
++};
++
++static int __init mc34708_pwm_init(void)
++{
++	return platform_driver_register(&mc34708_pwm_driver);
++}
++arch_initcall(mc34708_pwm_init);
++
++static void __exit mc34708_pwm_exit(void)
++{
++	platform_driver_unregister(&mc34708_pwm_driver);
++}
++module_exit(mc34708_pwm_exit);
++
++MODULE_DESCRIPTION("MC34708 PWM driver");
++MODULE_AUTHOR("Freescale Semiconductor, Inc.");
++MODULE_LICENSE("GPL");
+diff --git a/include/linux/mfd/mc34708/mc34708_pwm.h b/include/linux/mfd/mc34708/mc34708_pwm.h
+new file mode 100644
+index 0000000..9d69add
+--- /dev/null
++++ b/include/linux/mfd/mc34708/mc34708_pwm.h
+@@ -0,0 +1,53 @@
++/*
++ * Copyright (C) 2011 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
++ */
++
++/*
++ * based on arch/arm/plat-mxc/pwm.c
++ */
++
++#ifndef __MC34708_PWM_H
++#define __MC34708_PWM_H
++
++struct pwm_device;
++
++/*
++ * pwm_request - request a PWM device
++ */
++struct pwm_device *mc34708_pwm_request(int pwm_id, const char *label);
++
++/*
++ * pwm_free - free a PWM device
++ */
++void mc34708_pwm_free(struct pwm_device *pwm);
++
++/*
++ * pwm_config - change a PWM device configuration
++ */
++int mc34708_pwm_config(struct pwm_device *pwm, int duty_ns, int period_ns);
++
++/*
++ * pwm_enable - start a PWM output toggling
++ */
++int mc34708_pwm_enable(struct pwm_device *pwm);
++
++/*
++ * pwm_disable - stop a PWM output toggling
++ */
++void mc34708_pwm_disable(struct pwm_device *pwm);
++
++#endif /* __MC34708_PWM_H */
+-- 
+1.5.4.4
+

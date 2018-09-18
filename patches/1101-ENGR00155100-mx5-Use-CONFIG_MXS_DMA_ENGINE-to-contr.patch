@@ -1,0 +1,43 @@
+From 30aec68c15c69893ee746e28bc3af74ff9819589 Mon Sep 17 00:00:00 2001
+From: Lily Zhang <r58066@freescale.com>
+Date: Mon, 22 Aug 2011 12:21:30 +0800
+Subject: [PATCH] ENGR00155100 mx5: Use CONFIG_MXS_DMA_ENGINE to control DMA code
+
+Use CONFIG_MXS_DMA_ENGINE flag to control mxs dma engine
+code
+
+Signed-off-by: Lily Zhang <r58066@freescale.com>
+---
+ arch/arm/mach-mx5/dmaengine.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/dmaengine.c b/arch/arm/mach-mx5/dmaengine.c
+index e92d9b9..fd7374c 100644
+--- a/arch/arm/mach-mx5/dmaengine.c
++++ b/arch/arm/mach-mx5/dmaengine.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2010 Freescale Semiconductor, Inc. All Rights Reserved.
++ * Copyright (C) 2010-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -668,6 +668,7 @@ static const struct file_operations mxs_dma_proc_info_ops = {
+ 
+ static int __init mxs_dmaengine_info_init(void)
+ {
++#if defined(CONFIG_MXS_DMA_ENGINE)
+ 	struct proc_dir_entry *res;
+ 	res = create_proc_entry("dma-engine", 0, NULL);
+ 	if (!res) {
+@@ -675,6 +676,7 @@ static int __init mxs_dmaengine_info_init(void)
+ 		return -ENOMEM;
+ 	}
+ 	res->proc_fops = &mxs_dma_proc_info_ops;
++#endif
+ 	return 0;
+ }
+ 
+-- 
+1.5.4.4
+

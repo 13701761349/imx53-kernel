@@ -1,0 +1,31 @@
+From 0d50114eb58142a1a784422f1395ac9fb7d2c665 Mon Sep 17 00:00:00 2001
+From: Lily Zhang <r58066@freescale.com>
+Date: Mon, 25 Jul 2011 15:48:49 +0800
+Subject: [PATCH] ENGR00153586 mx53 ard: add mma8451 support
+
+Add mma8451 support for mx53 ard board.
+
+Signed-off-by: Lily Zhang <r58066@freescale.com>
+Signed-off-by: Angolini Daiane <B19406@freescale.com>
+---
+ arch/arm/mach-mx5/mx53_ard.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx53_ard.c b/arch/arm/mach-mx5/mx53_ard.c
+index de95332..f9cda06 100644
+--- a/arch/arm/mach-mx5/mx53_ard.c
++++ b/arch/arm/mach-mx5/mx53_ard.c
+@@ -795,6 +795,10 @@ static struct i2c_board_info mxc_i2c2_board_info[] __initdata = {
+ 	.addr = 0x21,
+ 	.platform_data = (void *)&adv7180_data,
+ 	 },
++	{
++	.type = "mma8451",
++	.addr = 0x1C,
++	},
+ };
+ 
+ static struct mtd_partition mxc_dataflash_partitions[] = {
+-- 
+1.5.4.4
+

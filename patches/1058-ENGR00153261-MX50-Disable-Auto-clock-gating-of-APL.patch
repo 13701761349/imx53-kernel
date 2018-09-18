@@ -1,0 +1,33 @@
+From a50ea00d2b0c2de46b4da67eaf1aff1f3df9784a Mon Sep 17 00:00:00 2001
+From: Ranjani Vaidyanathan <ra5478@freescale.com>
+Date: Mon, 11 Jul 2011 17:02:54 -0500
+Subject: [PATCH] ENGR00153261: MX50- Disable Auto clock gating of APLL.
+
+The HW automatically tries to clock gate APLL is all the PFDs
+are disabled, resulting in a possible race condition since
+the SW also tries to disable the APLL.
+Fix by clearing the PFD disable MASK bits in APLL.
+
+Signed-off-by: Ranjani Vaidyanathan <ra5478@freescale.com>
+---
+ arch/arm/mach-mx5/clock_mx50.c |    4 ++++
+ 1 files changed, 4 insertions(+), 0 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/clock_mx50.c b/arch/arm/mach-mx5/clock_mx50.c
+index 94bb100..4226822 100644
+--- a/arch/arm/mach-mx5/clock_mx50.c
++++ b/arch/arm/mach-mx5/clock_mx50.c
+@@ -3464,6 +3464,10 @@ int __init mx50_clocks_init(unsigned long ckil, unsigned long osc, unsigned long
+ 	__raw_writel(MXC_ANADIG_REF_SELFBIAS_OFF,
+ 					apll_base + MXC_ANADIG_MISC_SET);
+ 
++	/* Make sure to disable APLL auto-disable feature. */
++	__raw_writel((MXC_ANADIG_PFD_DIS_MASK << MXC_ANADIG_PFD_DIS_OFFSET),
++				apll_base + MXC_ANADIG_PLLCTRL_CLR);
++
+ 	clk_enable(&elcdif_pix_clk);
+ 	clk_set_parent(&elcdif_pix_clk, &pll1_sw_clk);
+ 	clk_disable(&elcdif_pix_clk);
+-- 
+1.5.4.4
+

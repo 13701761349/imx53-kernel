@@ -1,0 +1,58 @@
+From 5fb3475cb65fd956a8433451951b081de758f035 Mon Sep 17 00:00:00 2001
+From: Liu Ying <Ying.Liu@freescale.com>
+Date: Wed, 22 Jun 2011 14:26:05 +0800
+Subject: [PATCH] ENGR00144112 TVE:Fix potential hang issue for suspend
+
+Framebuffer suspend event comes before framebuffer
+blank event when system entering suspend mode.
+So, if another driver calls FB_EVENT_BLANK
+notifier chain, i.e, Android IPUv3 fb driver,
+the suspend and blank event handlers registered
+in TVE driver will be called. We used to disable
+TVE clock in suspend handler, so it causes system
+hang when we try to access TVE register when go
+to blank handler. This patch fixes this issue.
+
+Signed-off-by: Liu Ying <Ying.Liu@freescale.com>
+---
+ drivers/video/mxc/tve.c |   10 +++++++---
+ 1 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/video/mxc/tve.c b/drivers/video/mxc/tve.c
+index 3c7be5a..e57eb88 100644
+--- a/drivers/video/mxc/tve.c
++++ b/drivers/video/mxc/tve.c
+@@ -101,6 +101,7 @@
+ #define IPU_DISP_PORT 1
+ 
+ static int enabled;		/* enable power on or not */
++static int enabled_before_suspend;
+ DEFINE_SPINLOCK(tve_lock);
+ 
+ static struct fb_info *tve_fbi;
+@@ -929,8 +930,11 @@ static int tve_suspend(void)
+ 		__raw_writel(0, tve.base + tve_regs->tve_int_cont_reg);
+ 		__raw_writel(0, tve.base + tve_regs->tve_cd_cont_reg);
+ 		__raw_writel(0, tve.base + tve_regs->tve_com_conf_reg);
+-		clk_disable(tve.clk);
+-	}
++		tve_disable();
++		enabled_before_suspend = 1;
++	} else
++		enabled_before_suspend = 0;
++
+ 	return 0;
+ }
+ 
+@@ -938,7 +942,7 @@ static int tve_resume(struct fb_info *fbi)
+ {
+ 	int mode;
+ 
+-	if (enabled) {
++	if (enabled_before_suspend) {
+ 		clk_enable(tve.clk);
+ 
+ 		/* Setup cable detect */
+-- 
+1.5.4.4
+

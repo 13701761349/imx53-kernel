@@ -1,0 +1,33 @@
+From d1231b9a9d7972aac066d82580db2f3ac0c3ed5c Mon Sep 17 00:00:00 2001
+From: Dong Aisheng <b29396@freescale.com>
+Date: Fri, 10 Jun 2011 12:34:40 +0800
+Subject: [PATCH] ENGR00151378 esdhc: fix build failure for mx25/31/35
+
+The problem is in drivers/mmc/host/mx_sdhci.c.
+DIGCTL_BASE_ADDR is undefined.
+Define it for mx25/31/35 for pass building.
+
+Signed-off-by: Dong Aisheng <b29396@freescale.com>
+---
+ drivers/mmc/host/mx_sdhci.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/mmc/host/mx_sdhci.c b/drivers/mmc/host/mx_sdhci.c
+index d713d67..3940432 100644
+--- a/drivers/mmc/host/mx_sdhci.c
++++ b/drivers/mmc/host/mx_sdhci.c
+@@ -110,6 +110,11 @@ static unsigned int *adma_des_table;
+ #define MXC_SDHCI_NUM	4
+ #endif
+ 
++/* for MX25/MX31/MX35 and etc*/
++#ifndef DIGCTL_BASE_ADDR
++#define DIGCTL_BASE_ADDR 0
++#endif
++
+ static struct sdhci_chip *mxc_fix_chips[MXC_SDHCI_NUM];
+ 
+ static void sdhci_prepare_data(struct sdhci_host *, struct mmc_data *);
+-- 
+1.5.4.4
+

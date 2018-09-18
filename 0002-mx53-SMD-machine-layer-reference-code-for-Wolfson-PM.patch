@@ -1,0 +1,571 @@
+From 3b5ad704fb20429aa18f986fc636930a8cd6339d Mon Sep 17 00:00:00 2001
+From: Wayne Zou <b36644@freescale.com>
+Date: Tue, 16 Aug 2011 15:20:16 +0800
+Subject: [PATCH 2/2] mx53 SMD: machine layer reference code for Wolfson PMIC wm8325 on SMD
+
+machine layer reference code for Wolfson PMIC wm8325 on SMD
+
+Signed-off-by: Wayne Zou <b36644@freescale.com>
+---
+ arch/arm/mach-mx5/Makefile               |    2 +-
+ arch/arm/mach-mx5/mx53_smd.c             |   21 +-
+ arch/arm/mach-mx5/mx53_smd_pmic_wm8325.c |  384 ++++++++++++++++++++++++++++++
+ arch/arm/mach-mx5/pm.c                   |   32 ---
+ arch/arm/plat-mxc/include/mach/irqs.h    |    2 +
+ 5 files changed, 398 insertions(+), 43 deletions(-)
+ create mode 100644 arch/arm/mach-mx5/mx53_smd_pmic_wm8325.c
+
+diff --git a/arch/arm/mach-mx5/Makefile b/arch/arm/mach-mx5/Makefile
+index 4d795a7..9eda817 100644
+--- a/arch/arm/mach-mx5/Makefile
++++ b/arch/arm/mach-mx5/Makefile
+@@ -15,7 +15,7 @@ obj-$(CONFIG_MACH_MX51_3DS) += mx51_3stack.o mx51_3stack_gpio.o mx51_3stack_pmic
+ obj-$(CONFIG_MACH_MX51_BABBAGE) += mx51_babbage.o mx51_babbage_pmic_mc13892.o
+ obj-$(CONFIG_MACH_MX53_EVK) += mx53_evk.o mx53_evk_pmic_mc13892.o
+ obj-$(CONFIG_MACH_MX53_ARD) += mx53_ard.o mx53_ard_pmic_ltc3589.o
+-obj-$(CONFIG_MACH_MX53_SMD) += mx53_smd.o mx53_smd_pmic_da9053.o
++obj-$(CONFIG_MACH_MX53_SMD) += mx53_smd.o mx53_smd_pmic_wm8325.o
+ obj-$(CONFIG_MACH_MX53_LOCO) += mx53_loco.o mx53_loco_pmic_mc34708.o mx53_loco_pmic_da9053.o
+ obj-$(CONFIG_MACH_MX50_ARM2) += mx50_arm2.o mx50_arm2_pmic_mc13892.o
+ obj-$(CONFIG_MACH_MX50_RDP) += mx50_rdp.o mx50_rdp_pmic_mc13892.o mx50_rdp_pmic_mc34708.o
+diff --git a/arch/arm/mach-mx5/mx53_smd.c b/arch/arm/mach-mx5/mx53_smd.c
+index ffa1a85..d131f9a 100644
+--- a/arch/arm/mach-mx5/mx53_smd.c
++++ b/arch/arm/mach-mx5/mx53_smd.c
+@@ -154,7 +154,8 @@
+ #define MX53_SMD_PMIC_INT			(6*32 + 11)	/* GPIO_7_11 */
+ #define MX53_SMD_CAP_TCH_FUN1		(6*32 + 13)	/* GPIO_7_13 */
+ 
+-extern int __init mx53_smd_init_da9052(void);
++extern int __init mx53_smd_init_wm8325(void);
++extern void wm831x_poweroff_system(void);
+ 
+ static iomux_v3_cfg_t mx53_smd_pads[] = {
+ 	/* DI_VGA_HSYNC */
+@@ -477,7 +478,7 @@ static struct mxc_spi_master mxcspi1_data = {
+ };
+ 
+ static struct mxc_dvfs_platform_data dvfs_core_data = {
+-	.reg_id = "DA9052_BUCK_CORE",
++	.reg_id = "DCDC2",
+ 	.clk1_id = "cpu_clk",
+ 	.clk2_id = "gpc_dvfs_clk",
+ 	.gpc_cntr_offset = MXC_GPC_CNTR_OFFSET,
+@@ -501,12 +502,12 @@ static struct mxc_dvfs_platform_data dvfs_core_data = {
+ };
+ 
+ static struct mxc_bus_freq_platform_data bus_freq_data = {
+-	.gp_reg_id = "DA9052_BUCK_CORE",
+-	.lp_reg_id = "DA9052_BUCK_PRO",
++	.gp_reg_id = "DCDC2",
++	.lp_reg_id = "DCDC1",
+ };
+ 
+ static struct tve_platform_data tve_data = {
+-	.dac_reg = "DA9052_LDO7",
++	.dac_reg = "LDO1",
+ };
+ 
+ static struct ldb_platform_data ldb_data = {
+@@ -617,7 +618,7 @@ static void sii902x_hdmi_reset(void)
+ 
+ static struct mxc_lcd_platform_data sii902x_hdmi_data = {
+ 	.reset = sii902x_hdmi_reset,
+-	.analog_reg = "DA9052_LDO2",
++	.analog_reg = "LDO4",
+ 	.fb_id = "DISP3 BG",
+ 	.boot_enable = 1,
+ };
+@@ -627,8 +628,8 @@ static struct imxi2c_platform_data mxci2c_data = {
+ };
+ 
+ static struct mxc_camera_platform_data camera_data = {
+-	.analog_regulator = "DA9052_LDO7",
+-	.core_regulator = "DA9052_LDO9",
++	.analog_regulator = "LDO1",
++	.core_regulator = "LDO9",
+ 	.mclk = 24000000,
+ 	.csi = 0,
+ };
+@@ -1272,14 +1273,14 @@ static void __init mxc_board_init(void)
+ 	mx53_smd_io_init();
+ 
+ 	/* power off by sending shutdown command to da9053*/
+-	pm_power_off = da9053_power_off;
++	pm_power_off = wm831x_poweroff_system;
+ 	mxc_register_device(&mxc_dma_device, NULL);
+ 	mxc_register_device(&mxc_wdt_device, NULL);
+ 	mxc_register_device(&mxcspi1_device, &mxcspi1_data);
+ 	mxc_register_device(&mxci2c_devices[0], &mxci2c_data);
+ 	mxc_register_device(&mxci2c_devices[1], &mxci2c_data);
+ 	mxc_register_device(&mxci2c_devices[2], &mxci2c_data);
+-	mx53_smd_init_da9052();
++	mx53_smd_init_wm8325();
+ 
+ 	mxc_register_device(&mxc_rtc_device, NULL);
+ 	mxc_register_device(&mxc_ipu_device, &mxc_ipu_data);
+diff --git a/arch/arm/mach-mx5/mx53_smd_pmic_wm8325.c b/arch/arm/mach-mx5/mx53_smd_pmic_wm8325.c
+new file mode 100644
+index 0000000..ac53816
+--- /dev/null
++++ b/arch/arm/mach-mx5/mx53_smd_pmic_wm8325.c
+@@ -0,0 +1,384 @@
++/*
++ * Copyright (C) 2010-2011 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++
++/*
++ * mx53_smd_pmic_wm8325.c  --  i.MX53 SMD driver for pmic wm8325
++ */
++
++#include <linux/module.h>
++#include <linux/init.h>
++#include <linux/platform_device.h>
++#include <linux/i2c.h>
++#include <linux/irq.h>
++#include <linux/interrupt.h>
++#include <linux/platform_device.h>
++#include <linux/err.h>
++#include <linux/regulator/machine.h>
++#include <linux/regulator/fixed.h>
++#include <linux/mfd/wm831x/core.h>
++#include <linux/mfd/wm831x/pdata.h>
++#include <mach/irqs.h>
++#include <mach/iomux-mx53.h>
++#include <mach/gpio.h>
++
++
++#define MX53_SMD_WM_8325_GPIO3		(2*32 + 29)	/* GPIO_3_29, DVS1 function */
++
++/* VCC DC1 */
++static struct regulator_init_data wm8325_dc1 = {
++	.constraints = {
++		.name = "DCDC1",
++		.min_uV = 600000,
++		.max_uV = 1300000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* VDDGP DC2 */
++static struct regulator_init_data wm8325_dc2 = {
++	.constraints = {
++		.name = "DCDC2",
++		.min_uV =  600000,
++		.max_uV = 1300000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* VDDAL 1V3 DC3 */
++static struct regulator_init_data wm8325_dc3 = {
++	.constraints = {
++		.name = "DCDC3",
++		.min_uV = 850000,
++		.max_uV = 3400000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* DDR_1V5 DC4 */
++static struct regulator_init_data wm8325_dc4 = {
++	.constraints = {
++		.name = "DCDC4",
++		.min_uV = 850000,
++		.max_uV = 3400000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* TVDAC_2V75 LDO1 */
++static struct regulator_init_data wm8325_ldo1 = {
++	.constraints = {
++		.name = "LDO1",
++		.min_uV = 900000,
++		.max_uV = 3300000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* VDD_REG_2V5 LDO2 */
++static struct regulator_init_data wm8325_ldo2 = {
++	.constraints = {
++		.name = "LDO2",
++		.min_uV = 900000,
++		.max_uV = 3300000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* VUSB_2V5/LVDS_2V5/NVCC_XTAL_2V5 LDO3 */
++static struct regulator_init_data wm8325_ldo3 = {
++	.constraints = {
++		.name = "LDO3",
++		.min_uV = 900000,
++		.max_uV = 3300000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* VDD_DIG_PLL 1V3 LDO4 */
++static struct regulator_init_data wm8325_ldo4 = {
++	.constraints = {
++		.name = "LDO4",
++		.min_uV = 900000,
++		.max_uV = 3300000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* SATA_PHY_2V5 LDO5 */
++static struct regulator_init_data wm8325_ldo5 = {
++	.constraints = {
++		.name = "LDO5",
++		.min_uV = 900000,
++		.max_uV = 3300000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* VDD_FUSE 3V3 LDO6 */
++static struct regulator_init_data wm8325_ldo6 = {
++	.constraints = {
++		.name = "LDO6",
++		.min_uV = 900000,
++		.max_uV = 3300000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/*
++   NVCC_EIM_MAIN/NVCC_SD1&2/
++   NVCC_PATA/NVCC_GPIO/NVCC_FEC
++   3V3 LDO7
++*/
++static struct regulator_init_data wm8325_ldo7 = {
++	.constraints = {
++		.name = "LDO7",
++		.min_uV = 1000000,
++		.max_uV = 3500000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/*
++   NVCC_NANDF/NVCC_RESET/NVCC_CSI
++   NVCC_JTAG/NVCC_CKIH/VDD_ANA_PLL
++   1V8 LDO8
++*/
++static struct regulator_init_data wm8325_ldo8 = {
++	.constraints = {
++		.name = "LDO8",
++		.min_uV = 1000000,
++		.max_uV = 3500000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* SATA_1V3 LDO9 */
++static struct regulator_init_data wm8325_ldo9 = {
++	.constraints = {
++		.name = "LDO9",
++		.min_uV = 1000000,
++		.max_uV = 3500000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* NVCC_LCD 2V775 LDO10*/
++static struct regulator_init_data wm8325_ldo10 = {
++	.constraints = {
++		.name = "LDO10",
++		.min_uV = 1000000,
++		.max_uV = 3500000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++/* NVCC_SRTC 1V3 LDO11*/
++static struct regulator_init_data wm8325_ldo11 = {
++	.constraints = {
++		.name = "LDO11",
++		.min_uV = 800000,
++		.max_uV = 1550000,
++		.always_on = 1,
++		.boot_on = 1,
++		.valid_modes_mask = 0,
++		.valid_ops_mask = REGULATOR_CHANGE_VOLTAGE |
++			REGULATOR_CHANGE_STATUS | REGULATOR_CHANGE_MODE,
++	},
++};
++
++#define MX53_SMD_WM8325_IRQ			(2*32 + 14)	/* GPIO3_14 */
++#define WM8325_I2C_ADDR				(0x68)
++#define WM8325_I2C_DEVICE_NAME      "wm8325"
++
++#define WM8325_GPIO1_CONFIG_VAL     (0x848a)
++#define WM8325_GPIO2_CONFIG_VAL     (0x848c)
++#define WM8325_GPIO3_CONFIG_VAL     (0x8488)
++#define WM831X_DC1_CONTROL_2_VAL    (0x0b00)
++#define WM831X_DC1_DVS_CONTROL_VAL  (0x1024)
++#define WM831X_DC2_CONTROL_2_VAL    (0x0b00)
++#define WM831X_DC2_DVS_CONTROL_VAL  (0x101c)
++#define WM831X_LDO1_CONTROL_VAL     (0x0A00)
++static int wm8325_post_init(struct wm831x *wm831x)
++{
++	int ret;
++
++	/* Set GPIO1 as input ,active high, Hardware Enable1 Function */
++	ret = wm831x_reg_write(wm831x, WM831X_GPIO1_CONTROL, \
++			WM8325_GPIO1_CONFIG_VAL); 
++	if (0 > ret) {
++		printk("func:%s, write wm831x gpio1 ctrl reg error.\n", __func__);
++		goto out;
++	}
++
++	/* Set GPIO2 as input ,active high, Hardware Control1 Function */
++	ret = wm831x_reg_write(wm831x, WM831X_GPIO2_CONTROL, \
++			WM8325_GPIO2_CONFIG_VAL); 
++	if (0 > ret) {
++		printk("func:%s, write wm831x gpio2 ctrl reg error.\n", __func__);
++		goto out;
++	}
++
++	/* Set GPIO3 as input ,active high, DVS1 Function */
++	ret = wm831x_reg_write(wm831x, WM831X_GPIO3_CONTROL, \
++			WM8325_GPIO3_CONFIG_VAL); 
++	if (0 > ret) {
++		printk("func:%s, write wm831x gpio3 ctrl reg error.\n", __func__);
++		goto out;
++	}
++
++	/* Set DCDC1 hardware controlled by Hardware Control1 */
++	ret = wm831x_reg_write(wm831x, WM831X_DC1_CONTROL_2, \
++			WM831X_DC1_CONTROL_2_VAL); 
++	if (0 > ret) {
++		printk("func:%s, write wm831x dc1 ctrl2 reg error.\n", __func__);
++		goto out;
++	}
++
++	/* Set DCDC2 hardware controlled by Hardware Control1 */
++	ret = wm831x_reg_write(wm831x, WM831X_DC2_CONTROL_2, \
++			WM831X_DC2_CONTROL_2_VAL); 
++	if (0 > ret) {
++		printk("func:%s, write wm831x dc2 ctrl2 reg error.\n", __func__);
++		goto out;
++	}
++
++	/* Set DCDC1 controlled by DVS1, DC1_DVS_VSEL=0.95V */
++	ret = wm831x_reg_write(wm831x, WM831X_DC1_DVS_CONTROL, \
++			WM831X_DC1_DVS_CONTROL_VAL); 
++	if (0 > ret) {
++		printk("func:%s, write wm831x dc1 dvs reg error.\n", __func__);
++		goto out;
++	}
++
++	/* Set DCDC2 controlled by DVS1, DC2_DVS_VSEL=0.85V */
++	ret = wm831x_reg_write(wm831x, WM831X_DC2_DVS_CONTROL, \
++			WM831X_DC2_DVS_CONTROL_VAL); 
++	if (0 > ret) {
++		printk("func:%s, write wm831x dc2 dvs reg error.\n", __func__);
++		goto out;
++	}
++
++	/* Set other LDOs hardware controlled by Hardware Control1,
++	   and set other LDOs hardware enable function, accroding to board design
++	*/
++	/* Set LDO1 hardware controlled by Hardware Control1:low-pwr mode */
++	ret = wm831x_reg_write(wm831x, WM831X_LDO1_CONTROL, \
++			WM831X_LDO1_CONTROL_VAL); 
++	if (0 > ret) {
++		printk("func:%s, write wm831x ldo1 ctrl reg error.\n", __func__);
++		goto out;
++	}
++	return 0;
++
++out:
++	return ret;
++}
++
++
++static struct wm831x_pdata wm8325_plat= {
++	.post_init = wm8325_post_init,
++	.irq_base = MXC_BOARD_IRQ_START,
++
++	.dcdc = {
++		&wm8325_dc1,
++		&wm8325_dc2,
++		&wm8325_dc3,
++		&wm8325_dc4,
++	},
++	.ldo = {
++		 &wm8325_ldo1,        
++		 &wm8325_ldo2,        
++		 &wm8325_ldo3,        
++		 &wm8325_ldo4,        
++		 &wm8325_ldo5,        
++		 &wm8325_ldo6,        
++		 &wm8325_ldo7,        
++		 &wm8325_ldo8,        
++		 &wm8325_ldo9,        
++		 &wm8325_ldo10,        
++		 &wm8325_ldo11,        
++	},
++};
++
++static struct i2c_board_info __initdata wm8325_i2c_device = {
++	I2C_BOARD_INFO(WM8325_I2C_DEVICE_NAME, WM8325_I2C_ADDR >> 1),
++	.irq = gpio_to_irq(MX53_SMD_WM8325_IRQ),
++	.platform_data = &wm8325_plat,
++};
++
++int __init mx53_smd_init_wm8325(void)
++{
++	return i2c_register_board_info(0, &wm8325_i2c_device, 1);
++}
+diff --git a/arch/arm/mach-mx5/pm.c b/arch/arm/mach-mx5/pm.c
+index 60de321..f6d0d24 100644
+--- a/arch/arm/mach-mx5/pm.c
++++ b/arch/arm/mach-mx5/pm.c
+@@ -63,11 +63,6 @@ extern void mx50_suspend(u32 databahn_addr);
+ extern struct cpu_wp *(*get_cpu_wp)(int *wp);
+ extern void __iomem *ccm_base;
+ extern void __iomem *databahn_base;
+-extern void da9053_suspend_cmd_hw(void);
+-extern int da9053_restore_volt_settings(void);
+-extern void da9053_suspend_cmd_sw(void);
+-extern void da9053_resume_dump(void);
+-extern void pm_da9053_i2c_init(u32 base_addr);
+ 
+ extern int iram_ready;
+ void *suspend_iram_base;
+@@ -122,32 +117,8 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 		flush_cache_all();
+ 
+ 		if (cpu_is_mx51() || cpu_is_mx53()) {
+-			if (machine_is_mx53_smd() ||
+-				(machine_is_mx53_loco() &&
+-				(!board_is_mx53_loco_mc34708()))) {
+-				if (board_is_rev(BOARD_REV_4) ||
+-					machine_is_mx53_loco()) {
+-					mx53_smd_loco_irq_wake_fixup();
+-					da9053_suspend_cmd_sw();
+-				} else {
+-				/*  for new OTP DA9053 board,
+-					enable other irq for wakeup,
+-					otherwise disable other wakeup sources.
+-				*/
+-					if (da9053_get_chip_version() !=
+-						DA9053_VERSION_BB)
+-						mx53_smd_loco_irq_wake_fixup();
+-
+-					da9053_suspend_cmd_hw();
+-				}
+-			}
+ 			/* Run the suspend code from iRAM. */
+ 			suspend_in_iram(suspend_param1, NULL, NULL);
+-			if (machine_is_mx53_smd() ||
+-				(machine_is_mx53_loco() &&
+-				(!board_is_mx53_loco_mc34708())))
+-				if (da9053_get_chip_version())
+-					da9053_restore_volt_settings();
+ 			/*clear the EMPGC0/1 bits */
+ 			__raw_writel(0, MXC_SRPG_EMPGC0_SRPGCR);
+ 			__raw_writel(0, MXC_SRPG_EMPGC1_SRPGCR);
+@@ -324,9 +295,6 @@ static int __init pm_init(void)
+ 	}
+ 	printk(KERN_INFO "PM driver module loaded\n");
+ 
+-	if (machine_is_mx53_smd() ||
+-		machine_is_mx53_loco())
+-		pm_da9053_i2c_init(I2C1_BASE_ADDR - MX53_OFFSET);
+ 
+ 	return 0;
+ }
+diff --git a/arch/arm/plat-mxc/include/mach/irqs.h b/arch/arm/plat-mxc/include/mach/irqs.h
+index 1f00af5..c66d3b1 100644
+--- a/arch/arm/plat-mxc/include/mach/irqs.h
++++ b/arch/arm/plat-mxc/include/mach/irqs.h
+@@ -53,6 +53,8 @@
+ #define MXC_BOARD_IRQS  80
+ #elif defined CONFIG_MACH_MX35_3DS
+ #define MXC_BOARD_IRQS	32
++#elif defined CONFIG_MACH_MX53_SMD
++#define MXC_BOARD_IRQS  64  /* for wm8325 */	
+ #else
+ #define MXC_BOARD_IRQS	16
+ #endif
+-- 
+1.7.1
+

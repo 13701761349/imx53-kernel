@@ -1,0 +1,41 @@
+From 3a79c1069927ce400938e3bc1738ea8ba63430ce Mon Sep 17 00:00:00 2001
+From: Liu Ying <Ying.Liu@freescale.com>
+Date: Wed, 22 Jun 2011 11:04:35 +0800
+Subject: [PATCH] ENGR00151858-2 IPUv3 FB:Improve power stability
+
+This patch makes IPUv3 FB driver don't blank the
+framebuffer which is related with MEM_FG_SYNC channel
+when entering suspend mode, but leaves the channel
+disabling operation to IPUv3 driver. This makes
+the overlay framebuffer won't be accidently
+unblanked by up level code again, which causes
+suspend or resume fail. Note that this patch is
+for Android.
+
+Signed-off-by: Liu Ying <Ying.Liu@freescale.com>
+---
+ drivers/video/mxc/mxc_ipuv3_fb.c |    7 +++++++
+ 1 files changed, 7 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/video/mxc/mxc_ipuv3_fb.c b/drivers/video/mxc/mxc_ipuv3_fb.c
+index 63edf10..5d256bb 100644
+--- a/drivers/video/mxc/mxc_ipuv3_fb.c
++++ b/drivers/video/mxc/mxc_ipuv3_fb.c
+@@ -1481,7 +1481,14 @@ static int mxcfb_suspend(struct platform_device *pdev, pm_message_t state)
+ 	acquire_console_sem();
+ 	fb_set_suspend(fbi, 1);
+ 	saved_blank = mxc_fbi->cur_blank;
++#ifdef CONFIG_ANDROID
++	if (mxc_fbi->ipu_ch != MEM_FG_SYNC)
++		mxcfb_blank(FB_BLANK_POWERDOWN, fbi);
++	else
++		mxc_fbi->cur_blank = FB_BLANK_POWERDOWN;
++#else
+ 	mxcfb_blank(FB_BLANK_POWERDOWN, fbi);
++#endif
+ 	mxc_fbi->next_blank = saved_blank;
+ 	release_console_sem();
+ 
+-- 
+1.5.4.4
+

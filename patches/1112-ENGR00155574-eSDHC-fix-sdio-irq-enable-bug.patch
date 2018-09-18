@@ -1,0 +1,38 @@
+From dd9cafafb00985754dc42b306dd76ce2d6ab4775 Mon Sep 17 00:00:00 2001
+From: Tony Lin <tony.lin@freescale.com>
+Date: Tue, 30 Aug 2011 16:57:40 +0800
+Subject: [PATCH] ENGR00155574 [eSDHC]fix sdio irq enable bug
+
+a counter used in sdhci_enable_sdio_irq function is not correct.
+calling the function with enable flag will skip enabling the irq if it
+follows two continuous calls with disable flag because of the counter.
+to resolve this problem, simply set the counter to 1 or 0 instead of counting.
+this bug is reported by a customer.
+
+Signed-off-by: Tony Lin <tony.lin@freescale.com>
+---
+ drivers/mmc/host/mx_sdhci.c |    8 +-------
+ 1 files changed, 1 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/mmc/host/mx_sdhci.c b/drivers/mmc/host/mx_sdhci.c
+index 5c8ae5a..6b3ce8d 100644
+--- a/drivers/mmc/host/mx_sdhci.c
++++ b/drivers/mmc/host/mx_sdhci.c
+@@ -1247,13 +1247,7 @@ static void sdhci_enable_sdio_irq(struct mmc_host *mmc, int enable)
+ 
+ 	spin_lock_irqsave(&host->lock, flags);
+ 
+-	if (enable) {
+-		if (host->sdio_enable++)
+-			goto exit_unlock;
+-	} else {
+-		if (--(host->sdio_enable))
+-			goto exit_unlock;
+-	}
++	host->sdio_enable = enable;
+ 
+ 	ier = readl(host->ioaddr + SDHCI_INT_ENABLE);
+ 	prot = readl(host->ioaddr + SDHCI_HOST_CONTROL);
+-- 
+1.5.4.4
+

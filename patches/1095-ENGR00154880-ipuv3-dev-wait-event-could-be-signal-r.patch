@@ -1,0 +1,33 @@
+From 52660b68b23fe00b98e4ef461f90b6cfff1459a1 Mon Sep 17 00:00:00 2001
+From: Jason Chen <b02280@freescale.com>
+Date: Tue, 16 Aug 2011 10:38:40 +0800
+Subject: [PATCH] ENGR00154880 ipuv3 dev: wait event could be signal return
+
+wait_event_interruptible_timeout function could be signal
+return, so we need add ERESTARTSYS return value to let libc
+retry sys call.
+
+Signed-off-by: Jason Chen <b02280@freescale.com>
+---
+ drivers/mxc/ipu3/ipu_device.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/mxc/ipu3/ipu_device.c b/drivers/mxc/ipu3/ipu_device.c
+index 649d866..63f6467 100644
+--- a/drivers/mxc/ipu3/ipu_device.c
++++ b/drivers/mxc/ipu3/ipu_device.c
+@@ -324,8 +324,10 @@ static int mxc_ipu_ioctl(struct inode *inode, struct file *file,
+ 				if ((file->f_flags & O_NONBLOCK) &&
+ 					(irq_info[info.irq].irq_pending == 0))
+ 					return -EAGAIN;
+-				wait_event_interruptible_timeout(irq_info[info.irq].waitq,
++				r = wait_event_interruptible_timeout(irq_info[info.irq].waitq,
+ 						(irq_info[info.irq].irq_pending != 0), 2 * HZ);
++				if (r == -ERESTARTSYS)
++					return r;
+ 				r = get_events(&info);
+ 			}
+ 			ret = -1;
+-- 
+1.5.4.4
+

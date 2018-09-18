@@ -1,0 +1,36 @@
+From 0b5378e4533b5454af840369c4eea2636a5204b7 Mon Sep 17 00:00:00 2001
+From: Liu Ying <Ying.Liu@freescale.com>
+Date: Wed, 22 Jun 2011 11:03:17 +0800
+Subject: [PATCH] ENGR00151858-1 IPUv3:Improve power stablility
+
+This patch disables MEM_FG_SYNC channel when entering IPU
+suspend. Adding this operation to IPU suspend can make sure
+MEM_FG_SYNC channel is disabled, because we will not rely
+on IPUv3 framebuffer driver to blank the framebuffer which
+is related to MEM_FG_SYNC channel when entering suspend
+mode. Note that this patch is for Android.
+
+Signed-off-by: Liu Ying <Ying.Liu@freescale.com>
+---
+ drivers/mxc/ipu3/ipu_common.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/mxc/ipu3/ipu_common.c b/drivers/mxc/ipu3/ipu_common.c
+index d837cf4..7aa9640 100644
+--- a/drivers/mxc/ipu3/ipu_common.c
++++ b/drivers/mxc/ipu3/ipu_common.c
+@@ -2592,6 +2592,11 @@ EXPORT_SYMBOL(ipu_set_csc_coefficients);
+ 
+ static int ipu_suspend(struct platform_device *pdev, pm_message_t state)
+ {
++#ifdef CONFIG_ANDROID
++	ipu_disable_channel(MEM_FG_SYNC, true);
++	ipu_uninit_channel(MEM_FG_SYNC);
++#endif
++
+ 	if (g_ipu_clk_enabled) {
+ 		uint32_t chan_should_disable, timeout = 1000, time = 0;
+ 
+-- 
+1.5.4.4
+

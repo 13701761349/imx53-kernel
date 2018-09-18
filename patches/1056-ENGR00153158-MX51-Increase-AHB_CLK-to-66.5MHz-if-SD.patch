@@ -1,0 +1,32 @@
+From 46d896c4b76fa4877387e780b05883333f24f8d5 Mon Sep 17 00:00:00 2001
+From: Ranjani Vaidyanathan <ra5478@freescale.com>
+Date: Thu, 14 Jul 2011 16:16:00 -0500
+Subject: [PATCH] ENGR00153158: MX51-Increase AHB_CLK to 66.5MHz if SDHC is active
+
+Random failures can occur if SDHC clk is below AHB_CLK. So
+ensure that ahb_clk is atleast 66.5MHz when SDHC is active.
+
+Signed-off-by: Ranjani Vaidyanathan <ra5478@freescale.com>
+---
+ arch/arm/mach-mx5/clock.c |    5 +++++
+ 1 files changed, 5 insertions(+), 0 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/clock.c b/arch/arm/mach-mx5/clock.c
+index 5c08b1d..a57c666 100644
+--- a/arch/arm/mach-mx5/clock.c
++++ b/arch/arm/mach-mx5/clock.c
+@@ -4514,6 +4514,11 @@ int __init mx51_clocks_init(unsigned long ckil, unsigned long osc, unsigned long
+ 	esdhc2_clk[0].get_rate = _clk_esdhc2_get_rate;
+ 	esdhc2_clk[0].set_rate = _clk_esdhc2_set_rate;
+ 
++	esdhc1_clk[0].flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE;
++	esdhc2_clk[0].flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE;
++	esdhc3_clk[0].flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE;
++	esdhc4_clk[0].flags = AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE;
++
+ 	ata_clk[1].secondary = &ahb_max_clk;
+ 
+ 	clk_tree_init();
+-- 
+1.5.4.4
+

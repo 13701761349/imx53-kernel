@@ -1,0 +1,427 @@
+From 55610bf3ad7c0a44e04e152617addd18e8e8649b Mon Sep 17 00:00:00 2001
+From: Alan Tull <alan.tull@freescale.com>
+Date: Tue, 19 Jul 2011 11:32:32 -0500
+Subject: [PATCH] ENGR00153424-2 turn on ddr clock for audio buffers in external ram
+
+Audio is broken if buffers are in external ram and the external
+ram clock is turned off.  To fix it:
+ * In platform data, ext_ram is replaced with two settings:
+   ext_ram_rx and ext_ram_tx which control whether the buffer
+   will be in iram or external ram.
+ * imx-pcm.c no longer hardwired to put all capture streams in
+   external ram.
+ * if IRAM is disabled in the defconfig or if iram_alloc fails,
+   then ext_ram_rx or ext_ram_tx are updated so they will
+   show whether the buffers were allocated in external ram
+   or iram.
+ * During audio playback or capture, enable external ram clock
+   if the buffer is in external ram.
+
+Signed-off-by: Alan Tull <alan.tull@freescale.com>
+---
+ arch/arm/mach-mx25/devices.c     |   10 +++++++---
+ arch/arm/mach-mx25/mx25_3stack.c |    8 ++++++--
+ arch/arm/mach-mx5/mx50_arm2.c    |    3 +++
+ arch/arm/mach-mx5/mx50_rdp.c     |    4 ++++
+ arch/arm/mach-mx5/mx51_3stack.c  |   17 +++++++++++++++--
+ arch/arm/mach-mx5/mx51_babbage.c |   16 ++++++++++++++++
+ arch/arm/mach-mx5/mx53_ard.c     |   19 +++++++++++++++++--
+ arch/arm/mach-mx5/mx53_evk.c     |   16 +++++++++++++---
+ arch/arm/mach-mx5/mx53_loco.c    |    9 ++++++++-
+ arch/arm/mach-mx5/mx53_smd.c     |    9 ++++++++-
+ 10 files changed, 97 insertions(+), 14 deletions(-)
+
+diff --git a/arch/arm/mach-mx25/devices.c b/arch/arm/mach-mx25/devices.c
+index 532ee52..9f93ca1 100644
+--- a/arch/arm/mach-mx25/devices.c
++++ b/arch/arm/mach-mx25/devices.c
+@@ -1,6 +1,6 @@
+ /*
+  * Copyright 2009 Sascha Hauer, <kernel@pengutronix.de>
+- * Copyright (C) 2010 Freescale Semiconductor, Inc.
++ * Copyright (C) 2010-2011 Freescale Semiconductor, Inc.
+  *
+  * This program is free software; you can redistribute it and/or
+  * modify it under the terms of the GNU General Public License
+@@ -667,7 +667,8 @@ static void mxc_init_esai(void)
+ #endif
+ 
+ static struct mxc_audio_platform_data mxc_surround_audio_data = {
+-	.ext_ram = 1,
++	.ext_ram_tx = 1,
++	.ext_ram_rx = 1,
+ };
+ 
+ static struct platform_device mxc_alsa_surround_device = {
+@@ -680,7 +681,10 @@ static struct platform_device mxc_alsa_surround_device = {
+ 
+ static void mxc_init_surround_audio(void)
+ {
+-	platform_device_register(&mxc_alsa_surround_device);
++	mxc_surround_audio_data.ext_ram_clk = clk_get(NULL, "emi_clk");
++	clk_put(mxc_surround_audio_data.ext_ram_clk);
++	mxc_register_device(&mxc_alsa_surround_device,
++			    &mxc_surround_audio_data);
+ }
+ 
+ #if defined(CONFIG_MXC_IIM) || defined(CONFIG_MXC_IIM_MODULE)
+diff --git a/arch/arm/mach-mx25/mx25_3stack.c b/arch/arm/mach-mx25/mx25_3stack.c
+index dc528dd..7edb656 100644
+--- a/arch/arm/mach-mx25/mx25_3stack.c
++++ b/arch/arm/mach-mx25/mx25_3stack.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2008-2010 Freescale Semiconductor, Inc. All Rights Reserved.
++ * Copyright (C) 2008-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+  */
+ 
+ /*
+@@ -362,6 +362,7 @@ static struct mxc_audio_platform_data sgtl5000_data = {
+ 	.hp_irq = IOMUX_TO_IRQ(MX25_PIN_A10),
+ 	.hp_status = headphone_det_status,
+ 	.sysclk = 8300000,
++	.ext_ram_rx = 1,
+ };
+ 
+ static struct platform_device mxc_sgtl5000_device = {
+@@ -398,7 +399,10 @@ static void mxc_init_sgtl5000(void)
+ 	clk_enable(cko1);
+ 	sgtl5000_data.sysclk = rate;
+ 	sgtl5000_enable_amp();
+-	platform_device_register(&mxc_sgtl5000_device);
++
++	sgtl5000_data.ext_ram_clk = clk_get(NULL, "emi_clk");
++	clk_put(sgtl5000_data.ext_ram_clk);
++	mxc_register_device(&mxc_sgtl5000_device, &sgtl5000_data);
+ }
+ #else
+ static inline void mxc_init_sgtl5000(void)
+diff --git a/arch/arm/mach-mx5/mx50_arm2.c b/arch/arm/mach-mx5/mx50_arm2.c
+index d2fe44b..9e191e1 100644
+--- a/arch/arm/mach-mx5/mx50_arm2.c
++++ b/arch/arm/mach-mx5/mx50_arm2.c
+@@ -1358,7 +1358,10 @@ static void __init mxc_board_init(void)
+ /*
+ 	pm_power_off = mxc_power_off;
+ 	*/
++	sgtl5000_data.ext_ram_clk = clk_get(NULL, "ddr_clk");
++	clk_put(sgtl5000_data.ext_ram_clk);
+ 	mxc_register_device(&mxc_sgtl5000_device, &sgtl5000_data);
++
+ 	mxc_register_device(&gpmi_nfc_device, &gpmi_nfc_platform_data);
+ 
+ 	mx5_set_otghost_vbus_func(mx50_arm2_usb_set_vbus);
+diff --git a/arch/arm/mach-mx5/mx50_rdp.c b/arch/arm/mach-mx5/mx50_rdp.c
+index 2bd7d8c..9708d90 100644
+--- a/arch/arm/mach-mx5/mx50_rdp.c
++++ b/arch/arm/mach-mx5/mx50_rdp.c
+@@ -2022,7 +2022,11 @@ static void __init mxc_board_init(void)
+ 	pm_power_off = mxc_power_off;
+ 	*/
+ 	mx5_set_otghost_vbus_func(mx50_arm2_usb_set_vbus);
++
++	sgtl5000_data.ext_ram_clk = clk_get(NULL, "ddr_clk");
++	clk_put(sgtl5000_data.ext_ram_clk);
+ 	mxc_register_device(&mxc_sgtl5000_device, &sgtl5000_data);
++
+ 	mxc_register_device(&gpmi_nfc_device, &gpmi_nfc_platform_data);
+ 	mx5_usb_dr_init();
+ 	mx5_usbh1_init();
+diff --git a/arch/arm/mach-mx5/mx51_3stack.c b/arch/arm/mach-mx5/mx51_3stack.c
+index f2f5ed6..ddd8a4f 100644
+--- a/arch/arm/mach-mx5/mx51_3stack.c
++++ b/arch/arm/mach-mx5/mx51_3stack.c
+@@ -331,6 +331,8 @@ static struct mxc_dvfsper_data dvfs_per_data = {
+ 	.lp_low = 1250000,
+ };
+ 
++static struct mxc_audio_platform_data spdif_audio_data;
++
+ static struct mxc_spdif_platform_data mxc_spdif_data = {
+ 	.spdif_tx = 1,
+ 	.spdif_rx = 0,
+@@ -800,7 +802,9 @@ static struct platform_device mxc_wm8903_device = {
+ 	.id = 0,
+ };
+ 
+-static struct mxc_audio_platform_data wm8903_data;
++static struct mxc_audio_platform_data wm8903_data = {
++	.ext_ram_rx = 1,
++};
+ 
+ static void __init mxc_init_wm8903(void)
+ {
+@@ -814,7 +818,9 @@ static void __init mxc_init_wm8903(void)
+ 	wm8903_data.src_port = 2;
+ 	wm8903_data.ext_port = 3;
+ 
+-	(void)platform_device_register(&mxc_wm8903_device);
++	wm8903_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(wm8903_data.ext_ram_clk);
++	mxc_register_device(&mxc_wm8903_device, &wm8903_data);
+ }
+ 
+ static struct platform_device mxc_sgtl5000_device = {
+@@ -873,6 +879,7 @@ static struct mxc_audio_platform_data sgtl5000_data = {
+ 	.sysclk = 12000000,
+ 	.init = mxc_sgtl5000_plat_init,
+ 	.finit = mxc_sgtl5000_plat_finit,
++	.ext_ram_rx = 1,
+ };
+ 
+ static void bt_reset(void)
+@@ -973,6 +980,12 @@ static void __init mxc_board_init(void)
+ 	mxc_spdif_data.spdif_core_clk = clk_get(NULL, "spdif_xtal_clk");
+ 	clk_put(mxc_spdif_data.spdif_core_clk);
+ 
++	spdif_audio_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(spdif_audio_data.ext_ram_clk);
++
++	sgtl5000_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(sgtl5000_data.ext_ram_clk);
++
+ 	mxc_cpu_common_init();
+ 	mx51_3stack_io_init();
+ 
+diff --git a/arch/arm/mach-mx5/mx51_babbage.c b/arch/arm/mach-mx5/mx51_babbage.c
+index 1a077b1..1a7fa32 100644
+--- a/arch/arm/mach-mx5/mx51_babbage.c
++++ b/arch/arm/mach-mx5/mx51_babbage.c
+@@ -484,6 +484,12 @@ static struct mxc_dvfsper_data dvfs_per_data = {
+ 	.lp_low = 1250000,
+ };
+ 
++static struct mxc_audio_platform_data spdif_audio_data;
++
++static struct platform_device mxc_spdif_audio_device = {
++	.name = "imx-spdif-audio-device",
++};
++
+ static struct mxc_spdif_platform_data mxc_spdif_data = {
+ 	.spdif_tx = 1,
+ 	.spdif_rx = 0,
+@@ -893,6 +899,7 @@ static struct mxc_audio_platform_data sgtl5000_data = {
+ 	.amp_enable = mxc_sgtl5000_amp_enable,
+ 	.clock_enable = mxc_sgtl5000_clock_enable,
+ 	.sysclk = 12288000,
++	.ext_ram_rx = 1,
+ };
+ 
+ static struct platform_device mxc_sgtl5000_device = {
+@@ -1187,6 +1194,13 @@ static void __init mxc_board_init(void)
+ 
+ 	mxc_spdif_data.spdif_core_clk = clk_get(NULL, "spdif_xtal_clk");
+ 	clk_put(mxc_spdif_data.spdif_core_clk);
++
++	spdif_audio_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(spdif_audio_data.ext_ram_clk);
++
++	sgtl5000_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(sgtl5000_data.ext_ram_clk);
++
+ 	/* SD card detect irqs */
+ 	mxcsdhc2_device.resource[2].start = gpio_to_irq(BABBAGE_SD2_CD_2_5);
+ 	mxcsdhc2_device.resource[2].end = gpio_to_irq(BABBAGE_SD2_CD_2_5);
+@@ -1231,6 +1245,7 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_v4l2_device, NULL);
+ 	mxc_register_device(&mxc_v4l2out_device, NULL);
+ 	mxc_register_device(&mxc_powerkey_device, &pwrkey_data);
++	mxc_register_device(&mxc_spdif_audio_device, &spdif_audio_data);
+ 
+ 	mx51_babbage_init_mc13892();
+ 
+@@ -1262,6 +1277,7 @@ static void __init mxc_board_init(void)
+ 
+ 	gpio_request(BABBAGE_AUDAMP_STBY, "audioamp-stdby");
+ 	gpio_direction_output(BABBAGE_AUDAMP_STBY, 0);
++
+ 	mxc_register_device(&mxc_sgtl5000_device, &sgtl5000_data);
+ 
+ 	mx5_usb_dr_init();
+diff --git a/arch/arm/mach-mx5/mx53_ard.c b/arch/arm/mach-mx5/mx53_ard.c
+index 42107b1..de95332 100644
+--- a/arch/arm/mach-mx5/mx53_ard.c
++++ b/arch/arm/mach-mx5/mx53_ard.c
+@@ -999,6 +999,14 @@ static struct mxc_asrc_platform_data mxc_asrc_data = {
+ 	.clk_map_ver = 2.
+ };
+ 
++static struct mxc_audio_platform_data spdif_audio_data = {
++	.ext_ram_rx = 1,
++};
++
++static struct platform_device mxc_spdif_audio_device = {
++	.name = "imx-spdif-audio-device",
++};
++
+ static struct mxc_spdif_platform_data mxc_spdif_data = {
+ 	.spdif_tx = 0,
+ 	.spdif_rx = 1,
+@@ -1009,11 +1017,11 @@ static struct mxc_spdif_platform_data mxc_spdif_data = {
+ };
+ 
+ static struct mxc_audio_platform_data mxc_surround_audio_data = {
+-	.ext_ram = 1,
++	.ext_ram_tx = 1,
++	.ext_ram_rx = 1,
+ 	.sysclk = 24576000,
+ };
+ 
+-
+ static struct platform_device mxc_alsa_surround_device = {
+ 	.name = "imx-3stack-cs42888",
+ };
+@@ -1285,6 +1293,12 @@ static void __init mxc_board_init(void)
+ 	mxc_spdif_data.spdif_core_clk = clk_get(NULL, "spdif_xtal_clk");
+ 	clk_put(mxc_spdif_data.spdif_core_clk);
+ 
++	spdif_audio_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(spdif_audio_data.ext_ram_clk);
++
++	mxc_surround_audio_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(mxc_surround_audio_data.ext_ram_clk);
++
+ 	mxcsdhc2_device.resource[2].start = gpio_to_irq(ARD_SD2_CD);
+ 	mxcsdhc2_device.resource[2].end = gpio_to_irq(ARD_SD2_CD);
+ 	mxcsdhc1_device.resource[2].start = gpio_to_irq(ARD_SD1_CD);
+@@ -1352,6 +1366,7 @@ static void __init mxc_board_init(void)
+ 		mxc_register_device(&mxc_asrc_device, &mxc_asrc_data);
+ 	}
+ 
++	mxc_register_device(&mxc_spdif_audio_device, &spdif_audio_data);
+ 	mxc_register_device(&mxc_alsa_spdif_device, &mxc_spdif_data);
+ 
+ 	spi_register_board_info(mxc_dataflash_device,
+diff --git a/arch/arm/mach-mx5/mx53_evk.c b/arch/arm/mach-mx5/mx53_evk.c
+index 771bf53..777d553 100644
+--- a/arch/arm/mach-mx5/mx53_evk.c
++++ b/arch/arm/mach-mx5/mx53_evk.c
+@@ -1029,6 +1029,7 @@ static struct mxc_audio_platform_data sgtl5000_data = {
+ 	.hp_status = headphone_det_status,
+ 	.amp_enable = mxc_sgtl5000_amp_enable,
+ 	.init = mxc_sgtl5000_init,
++	.ext_ram_rx = 1,
+ };
+ 
+ static int mxc_sgtl5000_init(void)
+@@ -1175,7 +1176,7 @@ static struct mxc_spdif_platform_data mxc_spdif_data = {
+ };
+ 
+ static struct mxc_audio_platform_data spdif_audio_data = {
+-	.ext_ram = 1,
++	.ext_ram_tx = 1,
+ };
+ 
+ static struct platform_device mxc_spdif_audio_device = {
+@@ -1183,11 +1184,11 @@ static struct platform_device mxc_spdif_audio_device = {
+ };
+ 
+ static struct mxc_audio_platform_data mxc_surround_audio_data = {
+-	.ext_ram = 1,
++	.ext_ram_tx = 1,
++	.ext_ram_rx = 1,
+ 	.sysclk = 22579200,
+ };
+ 
+-
+ static struct platform_device mxc_alsa_surround_device = {
+ 	.name = "imx-3stack-cs42888",
+ };
+@@ -1462,6 +1463,9 @@ static void __init mxc_board_init(void)
+ 	mxc_spdif_data.spdif_core_clk = clk_get(NULL, "spdif_xtal_clk");
+ 	clk_put(mxc_spdif_data.spdif_core_clk);
+ 
++	spdif_audio_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(spdif_audio_data.ext_ram_clk);
++
+ 	/* SD card detect irqs */
+ 	if (board_is_mx53_arm2()) {
+ 		mxcsdhc1_device.resource[2].start = gpio_to_irq(ARM2_SD1_CD);
+@@ -1551,6 +1555,12 @@ static void __init mxc_board_init(void)
+ /*
+ 	pm_power_off = mxc_power_off;
+ 	*/
++	sgtl5000_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(sgtl5000_data.ext_ram_clk);
++
++	mxc_surround_audio_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(mxc_surround_audio_data.ext_ram_clk);
++
+ 	mxc_register_device(&mxc_sgtl5000_device, &sgtl5000_data);
+ 	mxc_register_device(&mxc_spdif_audio_device, &spdif_audio_data);
+ 	mxc_register_device(&mxc_mlb_device, &mlb_data);
+diff --git a/arch/arm/mach-mx5/mx53_loco.c b/arch/arm/mach-mx5/mx53_loco.c
+index 4478992..a8f22f5 100644
+--- a/arch/arm/mach-mx5/mx53_loco.c
++++ b/arch/arm/mach-mx5/mx53_loco.c
+@@ -592,6 +592,7 @@ static struct mxc_audio_platform_data sgtl5000_data = {
+ 	.hp_irq = gpio_to_irq(HEADPHONE_DEC_B),
+ 	.hp_status = headphone_det_status,
+ 	.init = mxc_sgtl5000_init,
++	.ext_ram_rx = 1,
+ };
+ 
+ static int mxc_sgtl5000_init(void)
+@@ -640,7 +641,7 @@ static struct mxc_spdif_platform_data mxc_spdif_data = {
+ };
+ 
+ static struct mxc_audio_platform_data spdif_audio_data = {
+-	.ext_ram = 1,
++	.ext_ram_tx = 1,
+ };
+ 
+ static struct platform_device mxc_spdif_audio_device = {
+@@ -942,8 +943,14 @@ static void __init mxc_board_init(void)
+ 	i2c_register_board_info(2, mxc_i2c2_board_info,
+ 				ARRAY_SIZE(mxc_i2c2_board_info));
+ 
++	sgtl5000_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(sgtl5000_data.ext_ram_clk);
+ 	mxc_register_device(&mxc_sgtl5000_device, &sgtl5000_data);
++
++	spdif_audio_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(spdif_audio_data.ext_ram_clk);
+ 	mxc_register_device(&mxc_spdif_audio_device, &spdif_audio_data);
++
+ 	mx5_usb_dr_init();
+ 	mx5_set_host1_vbus_func(mx53_loco_usbh1_vbus);
+ 	mx5_usbh1_init();
+diff --git a/arch/arm/mach-mx5/mx53_smd.c b/arch/arm/mach-mx5/mx53_smd.c
+index 13e2fd9..4d7d326 100644
+--- a/arch/arm/mach-mx5/mx53_smd.c
++++ b/arch/arm/mach-mx5/mx53_smd.c
+@@ -929,6 +929,7 @@ static struct mxc_audio_platform_data sgtl5000_data = {
+ 	.hp_status = headphone_det_status,
+ 	.amp_enable = mxc_sgtl5000_amp_enable,
+ 	.init = mxc_sgtl5000_init,
++	.ext_ram_rx = 1,
+ };
+ 
+ static int mxc_sgtl5000_init(void)
+@@ -959,7 +960,7 @@ static struct mxc_spdif_platform_data mxc_spdif_data = {
+ };
+ 
+ static struct mxc_audio_platform_data spdif_audio_data = {
+-	.ext_ram = 1,
++	.ext_ram_tx = 1,
+ };
+ 
+ static struct platform_device mxc_spdif_audio_device = {
+@@ -1300,8 +1301,14 @@ static void __init mxc_board_init(void)
+ 	i2c_register_board_info(2, mxc_i2c2_board_info,
+ 				ARRAY_SIZE(mxc_i2c2_board_info));
+ 
++	sgtl5000_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(sgtl5000_data.ext_ram_clk);
+ 	mxc_register_device(&mxc_sgtl5000_device, &sgtl5000_data);
++
++	spdif_audio_data.ext_ram_clk = clk_get(NULL, "emi_fast_clk");
++	clk_put(spdif_audio_data.ext_ram_clk);
+ 	mxc_register_device(&mxc_spdif_audio_device, &spdif_audio_data);
++
+ 	mx5_set_otghost_vbus_func(mx53_gpio_usbotg_driver_vbus);
+ 	mx5_usb_dr_init();
+ 	mx5_usbh1_init();
+-- 
+1.5.4.4
+

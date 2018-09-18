@@ -1,0 +1,30 @@
+From c6b3fe68c6e885219fc0273c0d5ac85d71417d3a Mon Sep 17 00:00:00 2001
+From: Wayne Zou <b36644@freescale.com>
+Date: Fri, 24 Jun 2011 13:21:37 +0800
+Subject: [PATCH] ENGR00152022 da9053: Fix a wrong macro definition of total register number.
+
+da9053: Fix a wrong macro definition of total register number,
+which leads to overwrite read pointer in struct da9052 when
+reading last register in da9053.
+
+Signed-off-by: Wayne Zou <b36644@freescale.com>
+---
+ include/linux/mfd/da9052/da9052.h |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/include/linux/mfd/da9052/da9052.h b/include/linux/mfd/da9052/da9052.h
+index 5680a83..27b8030 100644
+--- a/include/linux/mfd/da9052/da9052.h
++++ b/include/linux/mfd/da9052/da9052.h
+@@ -52,7 +52,7 @@
+ #define INVALID				1
+ 
+ /* Total number of registers in DA9057 */
+-#define DA9052_REG_CNT			DA9052_PAGE1_REG_END
++#define DA9052_REG_CNT			(DA9052_PAGE1_REG_END+1)
+ 
+ /* Maximum number of registers that can be read/written by a singe request */
+ #define	MAX_READ_WRITE_CNT		16
+-- 
+1.5.4.4
+

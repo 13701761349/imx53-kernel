@@ -1,0 +1,37 @@
+From caa2bbbf637bf1656dae705de027b48e939e8705 Mon Sep 17 00:00:00 2001
+From: Zeng Zhaoming <b32542@freescale.com>
+Date: Mon, 13 Jun 2011 17:59:08 +0800
+Subject: [PATCH] ENGR00151519 FEC: Fix compile warning about incompatible pointer type
+
+kernel compilation with a warning about fec.
+drivers/net/fec.c:929: warning: initialization from incompatible pointer type.
+
+This is caused by wrongly define get_link callback return type to int.
+
+Signed-off-by: Zeng Zhaoming <b32542@freescale.com>
+---
+ drivers/net/fec.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/fec.c b/drivers/net/fec.c
+index 49a9890..221b1c0 100644
+--- a/drivers/net/fec.c
++++ b/drivers/net/fec.c
+@@ -914,12 +914,12 @@ static void fec_enet_get_drvinfo(struct net_device *dev,
+ 	strcpy(info->bus_info, dev_name(&dev->dev));
+ }
+ 
+-static int fec_enet_get_link(struct net_device *dev)
++static u32 fec_enet_get_link(struct net_device *dev)
+ {
+ 	if (netif_running(dev))
+ 		return netif_carrier_ok(dev) ? 1 : 0;
+ 	else
+-		return -EINVAL;
++		return (u32)(-EINVAL);
+ }
+ 
+ static struct ethtool_ops fec_enet_ethtool_ops = {
+-- 
+1.5.4.4
+

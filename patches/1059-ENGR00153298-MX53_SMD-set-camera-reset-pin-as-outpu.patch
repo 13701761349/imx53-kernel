@@ -1,0 +1,29 @@
+From be5e4b5166d995a4fc6ff0ce595ef2428ecc7317 Mon Sep 17 00:00:00 2001
+From: Yuxi Sun <b36102@freescale.com>
+Date: Tue, 19 Jul 2011 16:31:54 +0800
+Subject: [PATCH] ENGR00153298 MX53_SMD: set camera reset pin as output
+
+This pin was not set before, it seems default as input, so need to
+set as output
+
+Signed-off-by: Tu Chih Chieh <b32449@freescale.com>
+---
+ arch/arm/mach-mx5/mx53_smd.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx53_smd.c b/arch/arm/mach-mx5/mx53_smd.c
+index a587820..0563075 100644
+--- a/arch/arm/mach-mx5/mx53_smd.c
++++ b/arch/arm/mach-mx5/mx53_smd.c
+@@ -1132,7 +1132,7 @@ static void __init mx53_smd_io_init(void)
+ 
+ 	/* Camera reset */
+ 	gpio_request(MX53_SMD_CSI0_RST, "cam-reset");
+-	gpio_set_value(MX53_SMD_CSI0_RST, 1);
++	gpio_direction_output(MX53_SMD_CSI0_RST, 1);
+ 
+ 	/* Camera power down */
+ 	gpio_request(MX53_SMD_CSI0_PWN, "cam-pwdn");
+-- 
+1.5.4.4
+

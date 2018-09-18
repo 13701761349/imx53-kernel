@@ -1,0 +1,31 @@
+From 026da2a48762f69db0acb7cb796844c6b471a7c1 Mon Sep 17 00:00:00 2001
+From: Zhang Jiejing <jiejing.zhang@freescale.com>
+Date: Fri, 29 Jul 2011 14:52:40 +0800
+Subject: [PATCH] ENGR00153941 input: egalax_ts - not dump the i2c package in debug level.
+
+Found the driver will leave i2c package dump message in kernel debug
+level, it create too much noice, this should be deleted.
+
+Signed-off-by: Zhang Jiejing <jiejing.zhang@freescale.com>
+---
+ drivers/input/touchscreen/egalax_ts.c |    4 ----
+ 1 files changed, 0 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/input/touchscreen/egalax_ts.c b/drivers/input/touchscreen/egalax_ts.c
+index 58273b9..b053d07 100644
+--- a/drivers/input/touchscreen/egalax_ts.c
++++ b/drivers/input/touchscreen/egalax_ts.c
+@@ -89,10 +89,6 @@ retry:
+ 	if (ret < 0)
+ 		return IRQ_HANDLED;
+ 
+-	dev_dbg(&client->dev, "recv ret:%d", ret);
+-	for (i = 0; i < MAX_I2C_DATA_LEN; i++)
+-		printk(KERN_DEBUG " %x ", buf[i]);
+-
+ 	if (buf[0] != REPORT_MODE_VENDOR
+ 	    && buf[0] != REPORT_MODE_SINGLE
+ 	    && buf[0] != REPORT_MODE_MTTOUCH) {
+-- 
+1.5.4.4
+

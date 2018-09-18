@@ -1,0 +1,75 @@
+From 1df25f603dbceb304f9440944e5fd59e6ddbf33d Mon Sep 17 00:00:00 2001
+From: Dong Aisheng <b29396@freescale.com>
+Date: Wed, 29 Jun 2011 20:25:24 +0800
+Subject: [PATCH] ENGR00154775 esdhc: provide clock enable interface
+
+1) do not always open clock for sdio card until sdio driver loaded
+2) WiFi should disable host clock for host when unloaded because host
+has no sense when sdio driver unloadded.
+Noted the clock disable should at the end of SDIO driver remove callback.
+
+Signed-off-by: Dong Aisheng <b29396@freescale.com>
+---
+ drivers/mmc/host/mx_sdhci.c |   23 ++++++++++++++++++++++-
+ 1 files changed, 22 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/mmc/host/mx_sdhci.c b/drivers/mmc/host/mx_sdhci.c
+index 5771d5e..5c8ae5a 100644
+--- a/drivers/mmc/host/mx_sdhci.c
++++ b/drivers/mmc/host/mx_sdhci.c
+@@ -47,6 +47,7 @@
+ #include <mach/dma.h>
+ #include <mach/mmc.h>
+ #include <mach/common.h>
++#include <linux/mmc/sdio_func.h>
+ 
+ #include "mx_sdhci.h"
+ 
+@@ -128,6 +129,21 @@ extern void gpio_sdhc_active(int module);
+ extern void gpio_sdhc_inactive(int module);
+ static void sdhci_dma_irq(void *devid, int error, unsigned int cnt);
+ 
++void sdhci_clock_enable(struct mmc_host *mmc, unsigned int enable)
++{
++	struct sdhci_host *host;
++
++	host = mmc_priv(mmc);
++	if (enable) {
++		clk_enable(host->clk);
++		host->plat_data->clk_flg = 1;
++	} else {
++		clk_disable(host->clk);
++		host->plat_data->clk_flg = 0;
++	}
++}
++EXPORT_SYMBOL(sdhci_clock_enable);
++
+ void mxc_mmc_force_detect(int id)
+ {
+ 	struct sdhci_host *host;
+@@ -1334,6 +1350,7 @@ static void sdhci_finish_worker(struct work_struct *work)
+ 	unsigned long flags;
+ 	int req_done;
+ 	struct mmc_request *mrq;
++	struct sdio_func *func = NULL;
+ 
+ 	spin_lock_irqsave(&host->lock, flags);
+ 
+@@ -1378,9 +1395,13 @@ static void sdhci_finish_worker(struct work_struct *work)
+ 	/* Stop the clock when the req is done */
+ 	req_done = !(readl(host->ioaddr + SDHCI_PRESENT_STATE) &
+ 		(SDHCI_DATA_ACTIVE | SDHCI_DOING_WRITE | SDHCI_DOING_READ));
++
++	if ((host->mmc->card) && host->mmc->card->sdio_func)
++		func = host->mmc->card->sdio_func[0];
++
+ 	if (req_done && host->plat_data->clk_flg &&
+ 		!(host->plat_data->clk_always_on) &&
+-		!(host->mmc->card && mmc_card_sdio(host->mmc->card))) {
++		!(func && sdio_func_present(func) && func->dev.driver)) {
+ 		clk_disable(host->clk);
+ 		host->plat_data->clk_flg = 0;
+ 	}
+-- 
+1.5.4.4
+

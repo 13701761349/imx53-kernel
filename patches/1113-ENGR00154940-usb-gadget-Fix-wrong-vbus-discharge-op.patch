@@ -1,0 +1,88 @@
+From 10a3a3e8efd31483c62a9b4c29034ddba4e89cbd Mon Sep 17 00:00:00 2001
+From: Tony Liu <b08287@freescale.com>
+Date: Wed, 17 Aug 2011 17:20:23 +0800
+Subject: [PATCH] ENGR00154940 usb-gadget: Fix wrong vbus discharge operation druing suspend
+
+-remove all the un-necessary operation in suspend_irq
+-remove delay work queue
+-fix review comments
+
+Signed-off-by: Tony Liu <b08287@freescale.com>
+---
+ drivers/usb/gadget/arcotg_udc.c |   28 ----------------------------
+ drivers/usb/gadget/arcotg_udc.h |    1 -
+ 2 files changed, 0 insertions(+), 29 deletions(-)
+
+diff --git a/drivers/usb/gadget/arcotg_udc.c b/drivers/usb/gadget/arcotg_udc.c
+index 44e3eed..7ac9a9d 100644
+--- a/drivers/usb/gadget/arcotg_udc.c
++++ b/drivers/usb/gadget/arcotg_udc.c
+@@ -2010,23 +2010,11 @@ static void port_change_irq(struct fsl_udc *udc)
+ /* Process suspend interrupt */
+ static void suspend_irq(struct fsl_udc *udc)
+ {
+-	u32 otgsc = 0;
+-
+ 	pr_debug("%s begins\n", __func__);
+ 
+ 	udc->resume_state = udc->usb_state;
+ 	udc->usb_state = USB_STATE_SUSPENDED;
+ 
+-	/* Set discharge vbus */
+-	otgsc = fsl_readl(&dr_regs->otgsc);
+-	otgsc &= ~(OTGSC_INTSTS_MASK);
+-	otgsc |= OTGSC_CTRL_VBUS_DISCHARGE;
+-	fsl_writel(otgsc, &dr_regs->otgsc);
+-
+-	/* discharge in work queue */
+-	cancel_delayed_work(&udc->gadget_delay_work);
+-	schedule_delayed_work(&udc->gadget_delay_work, msecs_to_jiffies(20));
+-
+ 	/* report suspend to the driver, serial.c does not support this */
+ 	if (udc->driver->suspend)
+ 		udc->driver->suspend(&udc->gadget);
+@@ -2118,20 +2106,6 @@ static void fsl_gadget_event(struct work_struct *work)
+ 	printk(KERN_DEBUG "%s: udc enter low power mode\n", __func__);
+ }
+ 
+-static void fsl_gadget_delay_event(struct work_struct *work)
+-{
+-	u32 otgsc = 0;
+-
+-	dr_clk_gate(true);
+-	otgsc = fsl_readl(&dr_regs->otgsc);
+-	/* clear vbus discharge */
+-	if (otgsc & OTGSC_CTRL_VBUS_DISCHARGE) {
+-		otgsc &= ~(OTGSC_INTSTS_MASK | OTGSC_CTRL_VBUS_DISCHARGE);
+-		fsl_writel(otgsc, &dr_regs->otgsc);
+-	}
+-	dr_clk_gate(false);
+-}
+-
+ /* if wakup udc, return true; else return false*/
+ bool try_wake_up_udc(struct fsl_udc *udc)
+ {
+@@ -2958,8 +2932,6 @@ static int __devinit fsl_udc_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	INIT_WORK(&udc_controller->gadget_work, fsl_gadget_event);
+-	INIT_DELAYED_WORK(&udc_controller->gadget_delay_work,
+-						fsl_gadget_delay_event);
+ #ifdef POSTPONE_FREE_LAST_DTD
+ 	last_free_td = NULL;
+ #endif
+diff --git a/drivers/usb/gadget/arcotg_udc.h b/drivers/usb/gadget/arcotg_udc.h
+index 8c154d0..ddc737f 100644
+--- a/drivers/usb/gadget/arcotg_udc.h
++++ b/drivers/usb/gadget/arcotg_udc.h
+@@ -625,7 +625,6 @@ struct fsl_udc {
+ 	u32 iram_buffer[IRAM_PPH_NTD];
+ 	void *iram_buffer_v[IRAM_PPH_NTD];
+ 	struct work_struct gadget_work;
+-	struct delayed_work gadget_delay_work;
+ };
+ 
+ /*-------------------------------------------------------------------------*/
+-- 
+1.5.4.4
+

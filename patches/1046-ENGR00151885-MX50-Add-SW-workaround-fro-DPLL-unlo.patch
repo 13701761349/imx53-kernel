@@ -1,0 +1,482 @@
+From 1789fad74fee0ad74c3142dd5b81cf3b4428c856 Mon Sep 17 00:00:00 2001
+From: Ranjani Vaidyanathan <ra5478@freescale.com>
+Date: Fri, 17 Jun 2011 11:36:18 -0500
+Subject: [PATCH] ENGR00151885: MX50 - Add SW workaround fro DPLL unlock HW issue.
+
+Add the workaround that significantly reduces the occurrence of the
+PLL1 unlock HW issue. For MX50, this workaround needs to be applied
+in three places:
+1. Suspend/resume code.
+2. PLL1 set rate function.
+3. PLL1 enable
+
+Signed-off-by: Ranjani Vaidyanathan <ra5478@freescale.com>
+---
+ arch/arm/mach-mx5/clock_mx50.c   |  106 ++++++++++++++++++++++++++++++++++++-
+ arch/arm/mach-mx5/crm_regs.h     |   22 ++++----
+ arch/arm/mach-mx5/mx50_rdp.c     |   13 +++--
+ arch/arm/mach-mx5/mx50_suspend.S |  108 ++++++++++++++++++++++++++++++++++---
+ arch/arm/mach-mx5/pm.c           |   22 +++++++-
+ arch/arm/mach-mx5/system.c       |    5 +-
+ 6 files changed, 243 insertions(+), 33 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/clock_mx50.c b/arch/arm/mach-mx5/clock_mx50.c
+index 0fbd6c3..94bb100 100644
+--- a/arch/arm/mach-mx5/clock_mx50.c
++++ b/arch/arm/mach-mx5/clock_mx50.c
+@@ -505,6 +505,77 @@ static struct clk pfd7_clk = {
+ 	.flags = RATE_PROPAGATES | AHB_MED_SET_POINT | CPU_FREQ_TRIG_UPDATE,
+ };
+ 
++static int do_workaround;
++
++static void do_pll_workaround(struct clk *clk, unsigned long rate)
++{
++	u32 reg;
++
++	/*
++	  * Need to apply the PLL1 workaround. Set the PLL initially to 864MHz
++	  * and then relock it to 800MHz.
++	  */
++	/* Disable the auto-restart bit o f PLL1. */
++	reg = __raw_readl(pll1_base + MXC_PLL_DP_CONFIG);
++	reg &= ~MXC_PLL_DP_CONFIG_AREN;
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_CONFIG);
++
++	/* Configure the PLL1 to 864MHz.
++	  * MFI =8
++	  * MFN = 180
++	  * MFD = 179
++	  * PDF = 0
++	  */
++	/* MFI & PFD */
++	reg = 0x80;
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_OP);
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_HFS_OP);
++
++	/* MFD */
++	reg = 179;
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_MFD);
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_HFS_MFD);
++
++	/* MFN */
++	reg = 180;
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_MFN);
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_HFS_MFN);
++
++	/* Restart PLL1. */
++	reg = (MXC_PLL_DP_CTL_DPDCK0_2_EN
++			| (2 << MXC_PLL_DP_CTL_REF_CLK_SEL_OFFSET)
++			| MXC_PLL_DP_CTL_UPEN | MXC_PLL_DP_CTL_RST
++			| MXC_PLL_DP_CTL_PLM | MXC_PLL_DP_CTL_BRM0);
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_CTL);
++
++	/* Poll the lock bit. */
++	if (!WAIT(__raw_readl(pll1_base + MXC_PLL_DP_CTL) & MXC_PLL_DP_CTL_LRF,
++				SPIN_DELAY))
++		panic("pll1_set_rate relock failed\n");
++
++	/* Now update the MFN so that PLL1 is at 800MHz. */
++	reg = 60;
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_MFN);
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_HFS_MFN);
++
++	/* Set the LDREQ bit. */
++	reg = __raw_readl(pll1_base + MXC_PLL_DP_CONFIG);
++	reg |= MXC_PLL_DP_CONFIG_LDREQ;
++	__raw_writel(reg, pll1_base + MXC_PLL_DP_CONFIG);
++
++	/* Poll the LDREQ bit. - cleared means
++	  * DPLL has finished updating MFN.
++	  */
++	while (__raw_readl(pll1_base + MXC_PLL_DP_CONFIG)
++			& MXC_PLL_DP_CONFIG_LDREQ)
++		;
++
++	/* Now delay for 4usecs. */
++	udelay(10);
++
++	do_workaround = 0;
++}
++
+ static unsigned long _clk_pll_get_rate(struct clk *clk)
+ {
+ 	long mfi, mfn, mfd, pdf, ref_clk, mfn_abs;
+@@ -614,8 +685,13 @@ static int _clk_pll_enable(struct clk *clk)
+ {
+ 	u32 reg;
+ 	void __iomem *pllbase;
++	u32 rate = clk_get_rate(clk);
+ 
+ 	pllbase = _get_pll_base(clk);
++
++	if (do_workaround && rate > 700000000)
++		do_pll_workaround(clk, rate);
++
+ 	reg = __raw_readl(pllbase + MXC_PLL_DP_CTL);
+ 
+ 	if (reg & MXC_PLL_DP_CTL_UPEN)
+@@ -639,12 +715,40 @@ static void _clk_pll_disable(struct clk *clk)
+ 	pllbase = _get_pll_base(clk);
+ 	reg = __raw_readl(pllbase + MXC_PLL_DP_CTL) & ~MXC_PLL_DP_CTL_UPEN;
+ 	__raw_writel(reg, pllbase + MXC_PLL_DP_CTL);
++	if (clk == &pll1_main_clk)
++		do_workaround = 1;
++}
++
++static int _clk_pll1_set_rate(struct clk *clk, unsigned long rate)
++{
++	u32 reg;
++
++	if (rate < 700000000) {
++		/* Clear the PLM bit. */
++		reg = __raw_readl(pll1_base + MXC_PLL_DP_CTL);
++		reg &= ~MXC_PLL_DP_CTL_PLM;
++		__raw_writel(reg, pll1_base + MXC_PLL_DP_CTL);
++
++		/* Enable the auto-restart bit o f PLL1. */
++		reg = __raw_readl(pll1_base + MXC_PLL_DP_CONFIG);
++		reg |= MXC_PLL_DP_CONFIG_AREN;
++		__raw_writel(reg, pll1_base + MXC_PLL_DP_CONFIG);
++
++		_clk_pll_set_rate(clk, rate);
++	} else {
++		/* Above 700MHz, only 800MHz freq is supported. */
++		if (rate != 800000000)
++			return -EINVAL;
++		do_pll_workaround(clk, rate);
++	}
++
++	return 0;
+ }
+ 
+ static struct clk pll1_main_clk = {
+ 	.parent = &osc_clk,
+ 	.get_rate = _clk_pll_get_rate,
+-	.set_rate = _clk_pll_set_rate,
++	.set_rate = _clk_pll1_set_rate,
+ 	.enable = _clk_pll_enable,
+ 	.disable = _clk_pll_disable,
+ 	.flags = RATE_PROPAGATES,
+diff --git a/arch/arm/mach-mx5/crm_regs.h b/arch/arm/mach-mx5/crm_regs.h
+index e258a7c..435e0f9 100644
+--- a/arch/arm/mach-mx5/crm_regs.h
++++ b/arch/arm/mach-mx5/crm_regs.h
+@@ -778,18 +778,16 @@
+ #define MXC_SRPG_MEGAMIX_BASE	(MXC_GPC_BASE + 0x2E0)
+ #define MXC_SRPG_EMI_BASE	(MXC_GPC_BASE + 0x300)
+ 
+-/* CORTEXA8 platform */
+-extern void __iomem *arm_plat_base;
+-#define MXC_CORTEXA8_BASE		(arm_plat_base)
+-#define MXC_CORTEXA8_PLAT_PVID		(arm_plat_base + 0x0)
+-#define MXC_CORTEXA8_PLAT_GPC		(arm_plat_base + 0x4)
+-#define MXC_CORTEXA8_PLAT_PIC		(arm_plat_base + 0x8)
+-#define MXC_CORTEXA8_PLAT_LPC		(arm_plat_base + 0xC)
+-#define MXC_CORTEXA8_PLAT_NEON_LPC	(arm_plat_base + 0x10)
+-#define MXC_CORTEXA8_PLAT_ICGC		(arm_plat_base + 0x14)
+-#define MXC_CORTEXA8_PLAT_AMC		(arm_plat_base + 0x18)
+-#define MXC_CORTEXA8_PLAT_NMC		(arm_plat_base + 0x20)
+-#define MXC_CORTEXA8_PLAT_NMS		(arm_plat_base + 0x24)
++/* CORTEXA8 platform offsets */
++#define MXC_CORTEXA8_PLAT_PVID		(0x0)
++#define MXC_CORTEXA8_PLAT_GPC			(0x4)
++#define MXC_CORTEXA8_PLAT_PIC			(0x8)
++#define MXC_CORTEXA8_PLAT_LPC			(0xC)
++#define MXC_CORTEXA8_PLAT_NEON_LPC	(0x10)
++#define MXC_CORTEXA8_PLAT_ICGC		(0x14)
++#define MXC_CORTEXA8_PLAT_AMC		(0x18)
++#define MXC_CORTEXA8_PLAT_NMC		(0x20)
++#define MXC_CORTEXA8_PLAT_NMS		(0x24)
+ 
+ /* DVFS CORE */
+ #define MXC_DVFSTHRS		(MXC_DVFS_CORE_BASE + 0x00)
+diff --git a/arch/arm/mach-mx5/mx50_rdp.c b/arch/arm/mach-mx5/mx50_rdp.c
+index f8eda99..f19e965 100644
+--- a/arch/arm/mach-mx5/mx50_rdp.c
++++ b/arch/arm/mach-mx5/mx50_rdp.c
+@@ -1938,6 +1938,13 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxcspi1_device, &mxcspi1_data);
+ 	mxc_register_device(&mxcspi3_device, &mxcspi3_data);
+ 
++	if (board_is_mx50_rd3())
++		dvfs_core_data.reg_id = "SW1A";
++	mxc_register_device(&mxc_dvfs_core_device, &dvfs_core_data);
++	if (board_is_mx50_rd3())
++		bus_freq_data.gp_reg_id = "SW1A";
++	mxc_register_device(&busfreq_device, &bus_freq_data);
++
+ 	mxc_register_device(&mxc_dma_device, NULL);
+ 	mxc_register_device(&mxs_dma_apbh_device, &dma_apbh_data);
+ 	mxc_register_device(&mxc_wdt_device, NULL);
+@@ -1951,13 +1958,7 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_pxp_device, NULL);
+ 	mxc_register_device(&mxc_pxp_client_device, NULL);
+ 	mxc_register_device(&mxc_pxp_v4l2, NULL);
+-	if (board_is_mx50_rd3())
+-		bus_freq_data.gp_reg_id = "SW1A";
+-	mxc_register_device(&busfreq_device, &bus_freq_data);
+ 	mxc_register_device(&pm_device, &mx50_pm_data);
+-	if (board_is_mx50_rd3())
+-		dvfs_core_data.reg_id = "SW1A";
+-	mxc_register_device(&mxc_dvfs_core_device, &dvfs_core_data);
+ 	if (enable_keypad)
+ 		mxc_register_device(&mxc_keypad_device, &keypad_plat_data);
+ 
+diff --git a/arch/arm/mach-mx5/mx50_suspend.S b/arch/arm/mach-mx5/mx50_suspend.S
+index 4d9e1b4..64874b1 100644
+--- a/arch/arm/mach-mx5/mx50_suspend.S
++++ b/arch/arm/mach-mx5/mx50_suspend.S
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2010 Freescale Semiconductor, Inc. All Rights Reserved.
++ * Copyright (C) 2010-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -17,6 +17,7 @@
+  */
+ 
+ #include <linux/linkage.h>
++#include "crm_regs.h"
+ 
+ #define ARM_CTRL_DCACHE     1 << 2
+ #define ARM_CTRL_ICACHE     1 << 12
+@@ -30,16 +31,21 @@
+  *  IRQs are already disabled.
+  */
+ ENTRY(mx50_suspend)
+-    stmfd   sp!, {r4,r5,r6,r7,r8, r9,r10,r11}     @ Save registers
++    stmfd   sp!, {r4,r5,r6,r7,r8, r9,r10,r11, r12}     @ Save registers
+ 
+     mov    r6, r0                       @save databahn address
++    mov    r8, r1                       @save ccm base address
++    mov    r12, r2                     @save pll1 base address
++
++    ldr      r0, [r6]
++    ldr      r0, [r8]
++    ldr      r0, [r12]
+ 
+ /* Before putting DDR into self-refresh, make sure
+     any LPM mode that the DDR might be in is exited.
+ */
+     /* If Databahn is in LPM4, exit that mode first. */
+-    ldr     r8,[r6, #0x50]             @Store LPM mode in r8
+-    mov   r0, r8
++    ldr     r0,[r6, #0x50]             @Store LPM mode in r8
+     bic     r0, r0, #0x1F
+     str     r0,[r6, #0x50]
+ 
+@@ -131,9 +137,96 @@ LoopCKE0:
+     bic     r0, r0, #0x1
+     str     r0,[r6]
+ 
++    /* Apply the PLL issue workaround.
++       DDR is in self-refresh. So no need to move DDR clock.
++       1. Change ARM clock to be sourced from PLL2.
++       2. Update MFN to transition to PLL1 to 864 MHz by applying the
++          following factors:
++          MFI = 8, MFN = 179, MFD = 179. PLL1 Freq = ~ 864MHz
++       3. Request PLL to load new MFN using DP_CONFIG (LDREQ bit).
++       4. No need to wait for new PLL rate.  PLL will be disabled
++           during suspend.
++     */
++
++   /* Make sure Step-clk is sourced from 24MHz. */
++    ldr      r1, [r8, #0x0c]
++    bic      r1, r1, #(0x3 << 7)
++    str      r1, [r8, #0x0c]
++
++    /* Set ARM to be sourced from Step-clk. */
++    ldr     r1, [r8, #0x0c]
++    orr     r1, r1, #0x4
++    str     r1, [r8, #0x0c]
++
++    /* Now do the MFN changes to relock PLL1 at 864MHz. */
++    ldr     r1, [r12, #MXC_PLL_DP_CONFIG]
++    bic     r1, r1, #0x2
++    str     r1, [r12, #MXC_PLL_DP_CONFIG] /* disable auto-restart AREN bit */
++
++   /* MFI = 8, MFN = 180, MFD = 179. PLL1 Freq = ~ 864MHz. */
++    ldr     r1, =0x80
++    str     r1, [r12, #MXC_PLL_DP_OP]
++    str     r1, [r12, #MXC_PLL_DP_HFS_OP]
++
++    ldr  	r1, =180
++    str     r1, [r12, #MXC_PLL_DP_MFN]
++    str     r1, [r12, #MXC_PLL_DP_HFS_MFN]
++
++    ldr  	r1, =179
++    str     r1, [r12, #MXC_PLL_DP_MFD]
++    str     r1, [r12, #MXC_PLL_DP_HFS_MFD]
++
++    /* Manually restart PLL1 */
++    ldr     r1, =0x00001236 /* Set PLM =1, manual restart and enable PLL*/
++    str     r1, [r12, #MXC_PLL_DP_CTL]
++
+     .long     0xe320f003              @ Opcode for WFI
+ 
+-    /* Start controller */
++    /* Continue DPLL issue workaround.
++      5. System will resume with PLL1 locked at 864 MHz.
++          ARM will be sourced from 24MHz OSC.
++      6. Update MFN to transition to 800 MHz by applying
++          the following factor:
++          MFN = 60
++      7. Request PLL to load new MFN using DP_CONFIG (LDREQ bit).
++      8. Wait for acknowledge of new MFN factor from
++          PLL by polling DP_CONFIG (LDREQ bit).
++      9. PLL1 will now be locked at 800 MHz.
++      10. Delay 4 usec to avoid PLL instability window
++      11. Move ARM clock to be sourced from PLL1.
++    */
++
++    /* Make sure the PLL is locked. */
++ 1:    ldr    r1, [r12, #MXC_PLL_DP_CTL]
++	ands  r1, r1, #0x1
++	beq   1b
++
++    /* Set PLL1 to 800MHz, MFN = 60. */
++    ldr    r1, =60
++    str   r1, [r12, #MXC_PLL_DP_MFN]
++    str   r1, [r12, #MXC_PLL_DP_HFS_MFN]
++
++    /* Set up the LDREQ */
++    ldr    r1, [r12, #MXC_PLL_DP_CONFIG]
++    orr    r1, r1, #1
++    str    r1, [r12, #MXC_PLL_DP_CONFIG]
++
++   /* Wait for LDREQ bit to clear. */
++2: ldr    r1, [r12, #MXC_PLL_DP_CONFIG]
++    tst  r1, #1
++    bne   2b
++
++    /* Wait for ~4 us. */
++    mov   r1, #100
++3: subs   r1, r1, #1
++    bge    3b
++
++    /* Move ARM back to PLL1 */
++    ldr     r1, [r8, #0x0c]
++    bic     r1, r1, #0x4
++    str     r1, [r8, #0x0c]
++
++    /* Start DDR controller */
+     ldr     r0,[r6]
+     orr     r0,r0,#0x1
+     str     r0,[r6]
+@@ -221,11 +314,8 @@ FinishedInvalidate:
+     orr     r0, r0, #ARM_CTRL_DCACHE @ Enable DCache
+     mcr     p15, 0, r0, c1, c0, 0    @ Update system control reg
+ 
+-    /* restore LPM mode. */
+-    str       r8, [r6, #0x50]
+-
+     /* Restore registers */
+-    ldmfd sp!, {r4,r5,r6,r7,r8,r9,r10,r11}
++    ldmfd sp!, {r4,r5,r6,r7,r8,r9,r10,r11, r12}
+     mov     pc, lr
+ 
+     .type   mx50_do_suspend, #object
+diff --git a/arch/arm/mach-mx5/pm.c b/arch/arm/mach-mx5/pm.c
+index 13bd979..60de321 100644
+--- a/arch/arm/mach-mx5/pm.c
++++ b/arch/arm/mach-mx5/pm.c
+@@ -44,6 +44,10 @@ static struct cpu_wp *cpu_wp_tbl;
+ static int cpu_wp_nr;
+ static struct clk *cpu_clk;
+ static struct mxc_pm_platform_data *pm_data;
++static int databahn_mode;
++
++void __iomem *pll1_base;
++void __iomem *pm_ccm_base;
+ 
+ #if defined(CONFIG_CPU_FREQ)
+ static int org_freq;
+@@ -57,6 +61,7 @@ struct clk *gpc_dvfs_clk;
+ extern void cpu_do_suspend_workaround(u32 sdclk_iomux_addr);
+ extern void mx50_suspend(u32 databahn_addr);
+ extern struct cpu_wp *(*get_cpu_wp)(int *wp);
++extern void __iomem *ccm_base;
+ extern void __iomem *databahn_base;
+ extern void da9053_suspend_cmd_hw(void);
+ extern int da9053_restore_volt_settings(void);
+@@ -66,7 +71,7 @@ extern void pm_da9053_i2c_init(u32 base_addr);
+ 
+ extern int iram_ready;
+ void *suspend_iram_base;
+-void (*suspend_in_iram)(void *param1) = NULL;
++void (*suspend_in_iram)(void *param1, void *param2, void* param3) = NULL;
+ void __iomem *suspend_param1;
+ 
+ #define TZIC_WAKEUP0_OFFSET            0x0E00
+@@ -137,7 +142,7 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 				}
+ 			}
+ 			/* Run the suspend code from iRAM. */
+-			suspend_in_iram(suspend_param1);
++			suspend_in_iram(suspend_param1, NULL, NULL);
+ 			if (machine_is_mx53_smd() ||
+ 				(machine_is_mx53_loco() &&
+ 				(!board_is_mx53_loco_mc34708())))
+@@ -151,8 +156,17 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 				if (pm_data->suspend_enter)
+ 					pm_data->suspend_enter();
+ 
++				/* Store the LPM mode of databanhn */
++				databahn_mode = __raw_readl(
++					databahn_base + DATABAHN_CTL_REG20);
++
+ 				/* Suspend now. */
+-				suspend_in_iram(databahn_base);
++				suspend_in_iram(databahn_base,
++						ccm_base, pll1_base);
++
++				/* Restore the LPM databahn_mode. */
++				__raw_writel(databahn_mode,
++					databahn_base + DATABAHN_CTL_REG20);
+ 
+ 				if (pm_data->suspend_exit)
+ 					pm_data->suspend_exit();
+@@ -271,6 +285,8 @@ static int __init pm_init(void)
+ 		printk(KERN_ERR "mx5_pm_driver register failed\n");
+ 		return -ENODEV;
+ 	}
++	pll1_base = ioremap(MX53_BASE_ADDR(PLL1_BASE_ADDR), SZ_4K);
++
+ 	suspend_param1 = 0;
+ 	suspend_set_ops(&mx5_suspend_ops);
+ 	/* Move suspend routine into iRAM */
+diff --git a/arch/arm/mach-mx5/system.c b/arch/arm/mach-mx5/system.c
+index 8275fc9..11b29b9 100644
+--- a/arch/arm/mach-mx5/system.c
++++ b/arch/arm/mach-mx5/system.c
+@@ -48,6 +48,7 @@ extern void mx50_wait(u32 ccm_base, u32 databahn_addr,
+ extern void stop_dvfs(void);
+ extern void *wait_in_iram_base;
+ extern void __iomem *apll_base;
++extern void __iomem *arm_plat_base;
+ 
+ static struct clk *gpc_dvfs_clk;
+ static struct clk *pll1_sw_clk;
+@@ -64,7 +65,7 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
+ 	int stop_mode = 0;
+ 
+ 	/* always allow platform to issue a deep sleep mode request */
+-	plat_lpc = __raw_readl(MXC_CORTEXA8_PLAT_LPC) &
++	plat_lpc = __raw_readl(arm_plat_base + MXC_CORTEXA8_PLAT_LPC) &
+ 	    ~(MXC_CORTEXA8_PLAT_LPC_DSM);
+ 	ccm_clpcr = __raw_readl(MXC_CCM_CLPCR) & ~(MXC_CCM_CLPCR_LPM_MASK);
+ 	arm_srpgcr = __raw_readl(MXC_SRPG_ARM_SRPGCR) & ~(MXC_SRPGCR_PCR);
+@@ -111,7 +112,7 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
+ 		return;
+ 	}
+ 
+-	__raw_writel(plat_lpc, MXC_CORTEXA8_PLAT_LPC);
++	__raw_writel(plat_lpc, arm_plat_base + MXC_CORTEXA8_PLAT_LPC);
+ 	__raw_writel(ccm_clpcr, MXC_CCM_CLPCR);
+ 	if (cpu_is_mx51() || (mx53_revision() >= IMX_CHIP_REVISION_2_0)
+ 		|| (mx50_revision() >= IMX_CHIP_REVISION_1_1))
+-- 
+1.5.4.4
+

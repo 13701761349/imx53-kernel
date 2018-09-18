@@ -1,0 +1,29 @@
+From a4220d073b7232036ac54c29f0aa44361501a101 Mon Sep 17 00:00:00 2001
+From: Zhang Yan <b34916@freescale.com>
+Date: Thu, 26 May 2011 14:15:41 +0800
+Subject: [PATCH] ENGR00144034 USB: Configure DI1_PIN12 as GPIO3_1 to enabel 26M_OSC_EN
+
+26M_OSC_EN controls the USB host ref clock, which is from DI1_PIN12.
+So, Configure DI1_PIN12 as GPIO3_1 iomux.
+
+Signed-off-by: Zhang Yan <b34916@freescale.com>
+---
+ arch/arm/mach-mx5/mx51_babbage.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx51_babbage.c b/arch/arm/mach-mx5/mx51_babbage.c
+index 92c8a56..daec48e 100644
+--- a/arch/arm/mach-mx5/mx51_babbage.c
++++ b/arch/arm/mach-mx5/mx51_babbage.c
+@@ -149,7 +149,7 @@ static iomux_v3_cfg_t mx51babbage_pads[] = {
+ 	MX51_PAD_EIM_A27__GPIO2_21,
+ 	MX51_PAD_EIM_DTACK__GPIO2_31,
+ 
+-	MX51_PAD_EIM_LBA__GPIO3_1,
++	MX51_PAD_DI1_PIN12__GPIO3_1,
+ 	MX51_PAD_DI1_D0_CS__GPIO3_3,
+ 	MX51_PAD_DISPB2_SER_DIN__GPIO3_5,
+ 	MX51_PAD_DISPB2_SER_DIO__GPIO3_6,
+-- 
+1.5.4.4
+

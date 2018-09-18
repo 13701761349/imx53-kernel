@@ -1,0 +1,142 @@
+From 8d682fefc9c73dccb52c6a973a8d017c2dd693ac Mon Sep 17 00:00:00 2001
+From: Lily Zhang <r58066@freescale.com>
+Date: Wed, 1 Jun 2011 12:36:01 +0800
+Subject: [PATCH] ENGR00144283-2 mxc driver: remove section mismatch warning message
+
+The following warning message is reported when building mx5 image:
+WARNING: modpost: Found 9 section mismatch(es).
+To see full details build your kernel with:
+'make CONFIG_DEBUG_SECTION_MISMATCH=y'
+
+This patch is used to remove the warning message in driver folders.
+
+Signed-off-by: Lily Zhang <r58066@freescale.com>
+---
+ drivers/usb/gadget/arcotg_udc.c          |    2 +-
+ drivers/usb/gadget/fsl_udc_core.c        |    4 ++--
+ drivers/usb/otg/fsl_otg.c                |    2 +-
+ drivers/video/backlight/mxc_mc13892_bl.c |    4 ++--
+ drivers/video/mxc/mxc_ipuv3_fb.c         |    4 ++--
+ drivers/watchdog/mxc_wdt.c               |    4 ++--
+ sound/soc/codecs/mxc_spdif.c             |    2 +-
+ 7 files changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/usb/gadget/arcotg_udc.c b/drivers/usb/gadget/arcotg_udc.c
+index 66b7311..ac50e84 100644
+--- a/drivers/usb/gadget/arcotg_udc.c
++++ b/drivers/usb/gadget/arcotg_udc.c
+@@ -2785,7 +2785,7 @@ static int __init struct_ep_setup(struct fsl_udc *udc, unsigned char index,
+  * all intialization operations implemented here except enabling usb_intr reg
+  * board setup should have been done in the platform code
+  */
+-static int __init fsl_udc_probe(struct platform_device *pdev)
++static int __devinit fsl_udc_probe(struct platform_device *pdev)
+ {
+ 	struct resource *res;
+ 	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
+diff --git a/drivers/usb/gadget/fsl_udc_core.c b/drivers/usb/gadget/fsl_udc_core.c
+index 7d0e7fb..45b3e84 100644
+--- a/drivers/usb/gadget/fsl_udc_core.c
++++ b/drivers/usb/gadget/fsl_udc_core.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2004-2010 Freescale Semicondutor, Inc. All rights reserved.
++ * Copyright (C) 2004-2011 Freescale Semiconductor, Inc. All rights reserved.
+  *
+  * Author: Li Yang <leoli@freescale.com>
+  *         Jiang Bo <tanya.jiang@freescale.com>
+@@ -2239,7 +2239,7 @@ static int __init struct_ep_setup(struct fsl_udc *udc, unsigned char index,
+  * all intialization operations implemented here except enabling usb_intr reg
+  * board setup should have been done in the platform code
+  */
+-static int __init fsl_udc_probe(struct platform_device *pdev)
++static int __devinit fsl_udc_probe(struct platform_device *pdev)
+ {
+ 	struct resource *res;
+ 	int ret = -ENODEV;
+diff --git a/drivers/usb/otg/fsl_otg.c b/drivers/usb/otg/fsl_otg.c
+index a13ebb4..4a48a02 100644
+--- a/drivers/usb/otg/fsl_otg.c
++++ b/drivers/usb/otg/fsl_otg.c
+@@ -1266,7 +1266,7 @@ static struct file_operations otg_fops = {
+ 	.release = fsl_otg_release,
+ };
+ 
+-static int __init fsl_otg_probe(struct platform_device *pdev)
++static int __devinit fsl_otg_probe(struct platform_device *pdev)
+ {
+ 	int status;
+ 	struct fsl_usb2_platform_data *pdata;
+diff --git a/drivers/video/backlight/mxc_mc13892_bl.c b/drivers/video/backlight/mxc_mc13892_bl.c
+index 752cae4..6bec2da 100644
+--- a/drivers/video/backlight/mxc_mc13892_bl.c
++++ b/drivers/video/backlight/mxc_mc13892_bl.c
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright 2008-2010 Freescale Semiconductor, Inc. All Rights Reserved.
++ * Copyright 2008-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+  */
+ 
+ /*
+@@ -75,7 +75,7 @@ static int mxcbl_check_fb(struct backlight_device *bldev, struct fb_info *info)
+ 
+ static struct backlight_ops bl_ops;
+ 
+-static int __init mxcbl_probe(struct platform_device *pdev)
++static int __devinit mxcbl_probe(struct platform_device *pdev)
+ {
+ 	int ret = 0;
+ 	struct backlight_device *bd;
+diff --git a/drivers/video/mxc/mxc_ipuv3_fb.c b/drivers/video/mxc/mxc_ipuv3_fb.c
+index 9da6e55..e474d8f 100644
+--- a/drivers/video/mxc/mxc_ipuv3_fb.c
++++ b/drivers/video/mxc/mxc_ipuv3_fb.c
+@@ -110,8 +110,8 @@ enum {
+ static bool g_dp_in_use;
+ LIST_HEAD(fb_alloc_list);
+ static struct fb_info *mxcfb_info[3];
+-static __initdata struct mxcfb_mode mxc_disp_mode[MXCFB_PORT_NUM];
+-static __initdata int (*mxcfb_pre_setup[MXCFB_PORT_NUM])(struct fb_info *info);
++static struct mxcfb_mode mxc_disp_mode[MXCFB_PORT_NUM];
++static int (*mxcfb_pre_setup[MXCFB_PORT_NUM])(struct fb_info *info);
+ 
+ /*
+  * register pre-setup callback for some display
+diff --git a/drivers/watchdog/mxc_wdt.c b/drivers/watchdog/mxc_wdt.c
+index eab9cec..a421791 100644
+--- a/drivers/watchdog/mxc_wdt.c
++++ b/drivers/watchdog/mxc_wdt.c
+@@ -3,7 +3,7 @@
+  *
+  * Watchdog driver for FSL MXC. It is based on omap1610_wdt.c
+  *
+- * Copyright (C) 2004-2010 Freescale Semiconductor, Inc.
++ * Copyright (C) 2004-2011 Freescale Semiconductor, Inc.
+  * 2005 (c) MontaVista Software, Inc.
+ 
+  * This program is free software; you can redistribute it and/or modify
+@@ -244,7 +244,7 @@ static struct miscdevice mxc_wdt_miscdev = {
+ 	.fops = &mxc_wdt_fops
+ };
+ 
+-static int __init mxc_wdt_probe(struct platform_device *pdev)
++static int __devinit mxc_wdt_probe(struct platform_device *pdev)
+ {
+ 	struct resource *res, *mem;
+ 	int ret;
+diff --git a/sound/soc/codecs/mxc_spdif.c b/sound/soc/codecs/mxc_spdif.c
+index 7b859ca..205c170 100644
+--- a/sound/soc/codecs/mxc_spdif.c
++++ b/sound/soc/codecs/mxc_spdif.c
+@@ -1169,7 +1169,7 @@ struct snd_soc_codec_device soc_codec_dev_spdif = {
+ };
+ EXPORT_SYMBOL_GPL(soc_codec_dev_spdif);
+ 
+-static int __init mxc_spdif_probe(struct platform_device *pdev)
++static int __devinit mxc_spdif_probe(struct platform_device *pdev)
+ {
+ 	struct mxc_spdif_platform_data *plat_data =
+ 	    (struct mxc_spdif_platform_data *)pdev->dev.platform_data;
+-- 
+1.5.4.4
+

@@ -1,0 +1,30 @@
+From f3b917375c3c05aaaf3d73086ddf872c4e246277 Mon Sep 17 00:00:00 2001
+From: Sammy He <r62914@freescale.com>
+Date: Fri, 27 May 2011 21:10:42 +0800
+Subject: [PATCH] ENGR00144148 mag3110: Replace dev_err with dev_dbg for int not received
+
+Use dev_dbg to replace dev_err for mag3110 interrupt not received error.
+Some board sensors may not be sold well, this log will be printed always
+and make user boring if user doesn't care of mag3110 result.
+
+Signed-off-by: Sammy He <r62914@freescale.com>
+---
+ drivers/hwmon/mag3110.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/hwmon/mag3110.c b/drivers/hwmon/mag3110.c
+index d2e6268..7c4bc62 100755
+--- a/drivers/hwmon/mag3110.c
++++ b/drivers/hwmon/mag3110.c
+@@ -151,7 +151,7 @@ static int mag3110_read_data(short *x, short *y, short *z)
+ 	if (!wait_event_interruptible_timeout
+ 	    (data->waitq, data->data_ready != 0,
+ 	     msecs_to_jiffies(INT_TIMEOUT))) {
+-		dev_err(&data->client->dev, "interrupt not received\n");
++		dev_dbg(&data->client->dev, "interrupt not received\n");
+ 		return -ETIME;
+ 	}
+ 
+-- 
+1.5.4.4
+

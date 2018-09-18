@@ -1,0 +1,344 @@
+From 12e3e1bba2678882b714dced9e33a5282d9e9a0c Mon Sep 17 00:00:00 2001
+From: Terry Lv <r65388@freescale.com>
+Date: Tue, 5 Jul 2011 16:54:09 +0800
+Subject: [PATCH] ENGR00152557 Add fuse bit check for GPU/VPU
+
+Add fuse bit check for GPU/VPU.
+Some boards may not have GPU/VPU. This can be controlled by fuse
+bit.
+Signed-off-by: Terry Lv <r65388@freescale.com>
+---
+ arch/arm/mach-mx5/Makefile                  |    3 +-
+ arch/arm/mach-mx5/check_fuse.c              |   63 +++++++++++++++++++++++++++
+ arch/arm/mach-mx5/mx50_arm2.c               |    4 +-
+ arch/arm/mach-mx5/mx50_rdp.c                |    4 +-
+ arch/arm/mach-mx5/mx51_3stack.c             |    7 ++-
+ arch/arm/mach-mx5/mx51_babbage.c            |    7 ++-
+ arch/arm/mach-mx5/mx53_ard.c                |    7 ++-
+ arch/arm/mach-mx5/mx53_evk.c                |    7 ++-
+ arch/arm/mach-mx5/mx53_loco.c               |    7 ++-
+ arch/arm/mach-mx5/mx53_smd.c                |    7 ++-
+ arch/arm/plat-mxc/include/mach/check_fuse.h |   35 +++++++++++++++
+ 11 files changed, 136 insertions(+), 15 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/Makefile b/arch/arm/mach-mx5/Makefile
+index 96da373..4d795a7 100644
+--- a/arch/arm/mach-mx5/Makefile
++++ b/arch/arm/mach-mx5/Makefile
+@@ -4,7 +4,8 @@
+ 
+ # Object file lists.
+ obj-y   := system.o iomux.o cpu.o mm.o devices.o serial.o dma.o lpmodes.o pm.o \
+-sdram_autogating.o bus_freq.o usb_dr.o usb_h1.o usb_h2.o dummy_gpio.o  early_setup.o
++sdram_autogating.o bus_freq.o usb_dr.o usb_h1.o usb_h2.o dummy_gpio.o  early_setup.o \
++check_fuse.o
+ 
+ obj-$(CONFIG_ARCH_MX51) += clock.o suspend.o
+ obj-$(CONFIG_ARCH_MX53) += clock.o suspend.o mx53_wp.o pm_da9053.o
+diff --git a/arch/arm/mach-mx5/check_fuse.c b/arch/arm/mach-mx5/check_fuse.c
+new file mode 100644
+index 0000000..a9ecf2c
+--- /dev/null
++++ b/arch/arm/mach-mx5/check_fuse.c
+@@ -0,0 +1,63 @@
++/*
++ * Copyright (C) 2010-2011 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#include <linux/io.h>
++#include <linux/module.h>
++#include <mach/hardware.h>
++#include <mach/check_fuse.h>
++
++int mxc_fuse_get_gpu_status(void)
++{
++	void __iomem *reg_base = NULL;
++	u32 reg_val = 0;
++	int bit_status = 0;
++
++	if (cpu_is_mx53() || cpu_is_mx51()) {
++		reg_base = IO_ADDRESS(IIM_BASE_ADDR);
++		reg_val = readl(reg_base + MXC_IIM_MX5_DISABLERS_OFFSET);
++		bit_status = (reg_val & MXC_IIM_MX5_DISABLERS_GPU_MASK)
++				>> MXC_IIM_MX5_DISABLERS_GPU_SHIFT;
++	} else if (cpu_is_mx50()) {
++		reg_base = ioremap(OCOTP_CTRL_BASE_ADDR, SZ_8K);
++		reg_val = readl(reg_base + FSL_OCOTP_MX5_CFG2_OFFSET);
++		bit_status = (reg_val & FSL_OCOTP_MX5_DISABLERS_GPU_MASK)
++				>> FSL_OCOTP_MX5_DISABLERS_GPU_SHIFT;
++	}
++
++	return (1 == bit_status);
++}
++EXPORT_SYMBOL(mxc_fuse_get_gpu_status);
++
++int mxc_fuse_get_vpu_status(void)
++{
++	void __iomem *reg_base = NULL;
++	u32 reg_val = 0;
++	int bit_status = 0;
++
++	if (cpu_is_mx53()) {
++		reg_base = IO_ADDRESS(IIM_BASE_ADDR);
++		reg_val = readl(reg_base + MXC_IIM_MX5_DISABLERS_OFFSET);
++		bit_status = (reg_val & MXC_IIM_MX5_DISABLERS_VPU_MASK)
++				>> MXC_IIM_MX5_DISABLERS_VPU_SHIFT;
++	}
++
++	return (1 == bit_status);
++}
++EXPORT_SYMBOL(mxc_fuse_get_vpu_status);
++
+diff --git a/arch/arm/mach-mx5/mx50_arm2.c b/arch/arm/mach-mx5/mx50_arm2.c
+index c7680f9..d2fe44b 100644
+--- a/arch/arm/mach-mx5/mx50_arm2.c
++++ b/arch/arm/mach-mx5/mx50_arm2.c
+@@ -60,6 +60,7 @@
+ #include <mach/mxc_dvfs.h>
+ #include <mach/iomux-mx50.h>
+ #include <mach/i2c.h>
++#include <mach/check_fuse.h>
+ 
+ #include "devices.h"
+ #include "crm_regs.h"
+@@ -1318,7 +1319,8 @@ static void __init mxc_board_init(void)
+ 
+ 	mxc_register_device(&mxc_rtc_device, NULL);
+ 	mxc_register_device(&mxc_w1_master_device, &mxc_w1_data);
+-	mxc_register_device(&gpu_device, &gpu_data);
++	if (!mxc_fuse_get_gpu_status())
++		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxc_pxp_device, NULL);
+ 	mxc_register_device(&mxc_pxp_client_device, NULL);
+ 	mxc_register_device(&mxc_pxp_v4l2, NULL);
+diff --git a/arch/arm/mach-mx5/mx50_rdp.c b/arch/arm/mach-mx5/mx50_rdp.c
+index f19e965..2bd7d8c 100644
+--- a/arch/arm/mach-mx5/mx50_rdp.c
++++ b/arch/arm/mach-mx5/mx50_rdp.c
+@@ -64,6 +64,7 @@
+ #include <mach/mxc_dvfs.h>
+ #include <mach/iomux-mx50.h>
+ #include <mach/i2c.h>
++#include <mach/check_fuse.h>
+ 
+ #include "devices.h"
+ #include "usb.h"
+@@ -1954,7 +1955,8 @@ static void __init mxc_board_init(void)
+ 
+ 	mxc_register_device(&mxc_rtc_device, NULL);
+ 	mxc_register_device(&mxc_w1_master_device, &mxc_w1_data);
+-	mxc_register_device(&gpu_device, &gpu_data);
++	if (!mxc_fuse_get_gpu_status())
++		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxc_pxp_device, NULL);
+ 	mxc_register_device(&mxc_pxp_client_device, NULL);
+ 	mxc_register_device(&mxc_pxp_v4l2, NULL);
+diff --git a/arch/arm/mach-mx5/mx51_3stack.c b/arch/arm/mach-mx5/mx51_3stack.c
+index 148f6e2..f2f5ed6 100644
+--- a/arch/arm/mach-mx5/mx51_3stack.c
++++ b/arch/arm/mach-mx5/mx51_3stack.c
+@@ -46,6 +46,7 @@
+ #include <mach/mmc.h>
+ #include <mach/mxc_dvfs.h>
+ #include <mach/i2c.h>
++#include <mach/check_fuse.h>
+ 
+ #include "devices.h"
+ #include "iomux.h"
+@@ -985,8 +986,10 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_w1_master_device, &mxc_w1_data);
+ 	mxc_register_device(&mxc_ipu_device, &mxc_ipu_data);
+ 	mxc_register_device(&mxc_tve_device, &tve_data);
+-	mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
+-	mxc_register_device(&gpu_device, &gpu_data);
++	if (!mxc_fuse_get_vpu_status())
++		mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
++	if (!mxc_fuse_get_gpu_status())
++		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxcscc_device, NULL);
+ 	mxc_register_device(&mx51_lpmode_device, NULL);
+ 	mxc_register_device(&busfreq_device, &bus_freq_data);
+diff --git a/arch/arm/mach-mx5/mx51_babbage.c b/arch/arm/mach-mx5/mx51_babbage.c
+index 5819661..1a077b1 100644
+--- a/arch/arm/mach-mx5/mx51_babbage.c
++++ b/arch/arm/mach-mx5/mx51_babbage.c
+@@ -48,6 +48,7 @@
+ #include <mach/iomux-mx51.h>
+ #include <mach/i2c.h>
+ #include <mach/mxc_iim.h>
++#include <mach/check_fuse.h>
+ 
+ #include "devices.h"
+ #include "crm_regs.h"
+@@ -1205,8 +1206,10 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_w1_master_device, &mxc_w1_data);
+ 	mxc_register_device(&mxc_ipu_device, &mxc_ipu_data);
+ 	mxc_register_device(&mxc_tve_device, &tve_data);
+-	mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
+-	mxc_register_device(&gpu_device, &gpu_data);
++	if (!mxc_fuse_get_vpu_status())
++		mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
++	if (!mxc_fuse_get_gpu_status())
++		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxcscc_device, NULL);
+ 	mxc_register_device(&mx51_lpmode_device, NULL);
+ 	mxc_register_device(&busfreq_device, &bus_freq_data);
+diff --git a/arch/arm/mach-mx5/mx53_ard.c b/arch/arm/mach-mx5/mx53_ard.c
+index c7081be..92d0ff8 100644
+--- a/arch/arm/mach-mx5/mx53_ard.c
++++ b/arch/arm/mach-mx5/mx53_ard.c
+@@ -61,6 +61,7 @@
+ #include <mach/iomux-mx53.h>
+ #include <mach/i2c.h>
+ #include <mach/mxc_iim.h>
++#include <mach/check_fuse.h>
+ 
+ #include "crm_regs.h"
+ #include "devices.h"
+@@ -1306,8 +1307,10 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_ipu_device, &mxc_ipu_data);
+ 	mxc_register_device(&mxc_ldb_device, &ldb_data);
+ 	mxc_register_device(&mxc_tve_device, &tve_data);
+-	mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
+-	mxc_register_device(&gpu_device, &gpu_data);
++	if (!mxc_fuse_get_vpu_status())
++		mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
++	if (!mxc_fuse_get_gpu_status())
++		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxcscc_device, NULL);
+ 
+ 	mxc_register_device(&mxc_dvfs_core_device, &dvfs_core_data);
+diff --git a/arch/arm/mach-mx5/mx53_evk.c b/arch/arm/mach-mx5/mx53_evk.c
+index b0571fa..db32e68 100644
+--- a/arch/arm/mach-mx5/mx53_evk.c
++++ b/arch/arm/mach-mx5/mx53_evk.c
+@@ -60,6 +60,7 @@
+ #include <mach/iomux-mx53.h>
+ #include <mach/i2c.h>
+ #include <mach/mxc_iim.h>
++#include <mach/check_fuse.h>
+ 
+ #include "crm_regs.h"
+ #include "devices.h"
+@@ -1491,8 +1492,10 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_ipu_device, &mxc_ipu_data);
+ 	mxc_register_device(&mxc_ldb_device, &ldb_data);
+ 	mxc_register_device(&mxc_tve_device, &tve_data);
+-	mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
+-	mxc_register_device(&gpu_device, &gpu_data);
++	if (!mxc_fuse_get_vpu_status())
++		mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
++	if (!mxc_fuse_get_gpu_status())
++		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxcscc_device, NULL);
+ 	/*
+ 	mxc_register_device(&mx53_lpmode_device, NULL);
+diff --git a/arch/arm/mach-mx5/mx53_loco.c b/arch/arm/mach-mx5/mx53_loco.c
+index 7efb14e..e86da0a 100644
+--- a/arch/arm/mach-mx5/mx53_loco.c
++++ b/arch/arm/mach-mx5/mx53_loco.c
+@@ -63,6 +63,7 @@
+ #include <mach/iomux-mx53.h>
+ #include <mach/i2c.h>
+ #include <mach/mxc_iim.h>
++#include <mach/check_fuse.h>
+ 
+ #include "crm_regs.h"
+ #include "devices.h"
+@@ -859,8 +860,10 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_ipu_device, &mxc_ipu_data);
+ 	mxc_register_device(&mxc_ldb_device, &ldb_data);
+ 	mxc_register_device(&mxc_tve_device, &tve_data);
+-	mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
+-	mxc_register_device(&gpu_device, &gpu_data);
++	if (!mxc_fuse_get_vpu_status())
++		mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
++	if (!mxc_fuse_get_gpu_status())
++		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxcscc_device, NULL);
+ 	mxc_register_device(&mxc_dvfs_core_device, &dvfs_core_data);
+ 	mxc_register_device(&busfreq_device, &bus_freq_data);
+diff --git a/arch/arm/mach-mx5/mx53_smd.c b/arch/arm/mach-mx5/mx53_smd.c
+index 042ec5f..a587820 100644
+--- a/arch/arm/mach-mx5/mx53_smd.c
++++ b/arch/arm/mach-mx5/mx53_smd.c
+@@ -64,6 +64,7 @@
+ #include <mach/i2c.h>
+ #include <mach/mxc_iim.h>
+ #include <mach/mxc_rfkill.h>
++#include <mach/check_fuse.h>
+ 
+ #include "crm_regs.h"
+ #include "devices.h"
+@@ -1205,8 +1206,10 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_ipu_device, &mxc_ipu_data);
+ 	mxc_register_device(&mxc_ldb_device, &ldb_data);
+ 	mxc_register_device(&mxc_tve_device, &tve_data);
+-	mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
+-	mxc_register_device(&gpu_device, &gpu_data);
++	if (!mxc_fuse_get_vpu_status())
++		mxc_register_device(&mxcvpu_device, &mxc_vpu_data);
++	if (!mxc_fuse_get_gpu_status())
++		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxcscc_device, NULL);
+ 	mxc_register_device(&mxc_dvfs_core_device, &dvfs_core_data);
+ 	mxc_register_device(&busfreq_device, &bus_freq_data);
+diff --git a/arch/arm/plat-mxc/include/mach/check_fuse.h b/arch/arm/plat-mxc/include/mach/check_fuse.h
+new file mode 100644
+index 0000000..270ece3
+--- /dev/null
++++ b/arch/arm/plat-mxc/include/mach/check_fuse.h
+@@ -0,0 +1,35 @@
++/*
++ * Copyright (C) 2011 Freescale Semiconductor, Inc. All Rights Reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#ifndef __ARCH_ARM_MACH_MX5_FUSE_CHECK_H__
++#define __ARCH_ARM_MACH_MX5_FUSE_CHECK_H__
++
++#define MXC_IIM_MX5_DISABLERS_OFFSET 0x8
++#define MXC_IIM_MX5_DISABLERS_GPU_MASK 0x4
++#define MXC_IIM_MX5_DISABLERS_GPU_SHIFT 0x2
++#define MXC_IIM_MX5_DISABLERS_VPU_MASK 0x2
++#define MXC_IIM_MX5_DISABLERS_VPU_SHIFT 0x1
++
++#define FSL_OCOTP_MX5_CFG2_OFFSET 0x060
++#define FSL_OCOTP_MX5_DISABLERS_GPU_MASK 0x2000000
++#define FSL_OCOTP_MX5_DISABLERS_GPU_SHIFT 0x19
++
++int mxc_fuse_get_gpu_status(void);
++int mxc_fuse_get_vpu_status(void);
++
++#endif
+-- 
+1.5.4.4
+

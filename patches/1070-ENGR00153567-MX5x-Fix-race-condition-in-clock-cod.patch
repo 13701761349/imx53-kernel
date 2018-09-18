@@ -1,0 +1,135 @@
+From 62b49720f7e27f2aa0ad03fed25df58695a11339 Mon Sep 17 00:00:00 2001
+From: Ranjani Vaidyanathan <ra5478@freescale.com>
+Date: Wed, 20 Jul 2011 14:40:09 -0500
+Subject: [PATCH] ENGR00153567: MX5x - Fix race condition in clock code
+
+There is possible race condition between enabling/disabling clocks
+and the corresponding calls to change the bus frequencies.
+Fix by ensuring that the flags used to change the bus frequencies
+are set in a atomic context and before the bus frequency is
+actually changed.
+
+Signed-off-by: Ranjani Vaidyanathan <ra5478@freescale.com>
+---
+ arch/arm/mach-mx5/clock.c      |    8 ++++++++
+ arch/arm/mach-mx5/clock_mx50.c |   15 +++++----------
+ arch/arm/plat-mxc/clock.c      |   17 +++++++++++++++--
+ 3 files changed, 28 insertions(+), 12 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/clock.c b/arch/arm/mach-mx5/clock.c
+index a57c666..4559876 100644
+--- a/arch/arm/mach-mx5/clock.c
++++ b/arch/arm/mach-mx5/clock.c
+@@ -4768,6 +4768,10 @@ int __init mx51_clocks_init(unsigned long ckil, unsigned long osc, unsigned long
+ 
+ 	base = ioremap(GPT1_BASE_ADDR, SZ_4K);
+ 	mxc_timer_init(&gpt_clk[0], base, MXC_INT_GPT);
++
++	lp_med_freq = 0;
++	lp_high_freq = 0;
++
+ 	return 0;
+ }
+ 
+@@ -5034,6 +5038,10 @@ int __init mx53_clocks_init(unsigned long ckil, unsigned long osc, unsigned long
+ 			1190000));
+ 	base = ioremap(MX53_BASE_ADDR(GPT1_BASE_ADDR), SZ_4K);
+ 	mxc_timer_init(&gpt_clk[0], base, MXC_INT_GPT);
++
++	lp_med_freq = 0;
++	lp_high_freq = 0;
++
+ 	return 0;
+ }
+ 
+diff --git a/arch/arm/mach-mx5/clock_mx50.c b/arch/arm/mach-mx5/clock_mx50.c
+index 4226822..704de40 100644
+--- a/arch/arm/mach-mx5/clock_mx50.c
++++ b/arch/arm/mach-mx5/clock_mx50.c
+@@ -146,11 +146,6 @@ static int _clk_enable(struct clk *clk)
+ 	reg |= MXC_CCM_CCGRx_CG_MASK << clk->enable_shift;
+ 	__raw_writel(reg, clk->enable_reg);
+ 
+-	if (clk->flags & AHB_HIGH_SET_POINT)
+-		lp_high_freq++;
+-	else if (clk->flags & AHB_MED_SET_POINT)
+-		lp_med_freq++;
+-
+ 	return 0;
+ }
+ 
+@@ -168,14 +163,10 @@ static int _clk_enable_inrun(struct clk *clk)
+ static void _clk_disable(struct clk *clk)
+ {
+ 	u32 reg;
++
+ 	reg = __raw_readl(clk->enable_reg);
+ 	reg &= ~(MXC_CCM_CCGRx_CG_MASK << clk->enable_shift);
+ 	__raw_writel(reg, clk->enable_reg);
+-
+-	if (clk->flags & AHB_HIGH_SET_POINT)
+-		lp_high_freq--;
+-	else if (clk->flags & AHB_MED_SET_POINT)
+-		lp_med_freq--;
+ }
+ 
+ static void _clk_disable_inwait(struct clk *clk)
+@@ -3592,6 +3583,10 @@ int __init mx50_clocks_init(unsigned long ckil, unsigned long osc, unsigned long
+ 
+ 	base = ioremap(MX53_BASE_ADDR(GPT1_BASE_ADDR), SZ_4K);
+ 	mxc_timer_init(&gpt_clk[0], base, MXC_INT_GPT);
++
++	lp_med_freq = 0;
++	lp_high_freq = 0;
++
+ 	return 0;
+ }
+ 
+diff --git a/arch/arm/plat-mxc/clock.c b/arch/arm/plat-mxc/clock.c
+index fae8dbb..858e1d4 100644
+--- a/arch/arm/plat-mxc/clock.c
++++ b/arch/arm/plat-mxc/clock.c
+@@ -181,6 +181,15 @@ int clk_enable(struct clk *clk)
+ 	if (clk == NULL || IS_ERR(clk))
+ 		return -EINVAL;
+ 
++	spin_lock_irqsave(&clockfw_lock, flags);
++
++	if (clk->flags & AHB_HIGH_SET_POINT)
++		lp_high_freq++;
++	else if (clk->flags & AHB_MED_SET_POINT)
++		lp_med_freq++;
++
++	spin_unlock_irqrestore(&clockfw_lock, flags);
++
+ 	if ((clk->flags & CPU_FREQ_TRIG_UPDATE)
+ 			&& (clk_get_usecount(clk) == 0)) {
+ #if (defined(CONFIG_ARCH_MX5) || defined(CONFIG_ARCH_MX37))
+@@ -203,7 +212,6 @@ int clk_enable(struct clk *clk)
+ #endif
+ 	}
+ 
+-
+ 	spin_lock_irqsave(&clockfw_lock, flags);
+ 
+ 	ret = __clk_enable(clk);
+@@ -235,10 +243,15 @@ void clk_disable(struct clk *clk)
+ 
+ 	__clk_disable(clk);
+ 
++	if (clk->flags & AHB_HIGH_SET_POINT)
++		lp_high_freq--;
++	else if (clk->flags & AHB_MED_SET_POINT)
++		lp_med_freq--;
++
+ 	spin_unlock_irqrestore(&clockfw_lock, flags);
+ 
+ 	if ((clk->flags & CPU_FREQ_TRIG_UPDATE)
+-			&& (clk_get_usecount(clk) == 0)) {
++			&& (clk->usecount == 0)) {
+ #if (defined(CONFIG_ARCH_MX5) || defined(CONFIG_ARCH_MX37))
+ 		if (low_freq_bus_used() && !low_bus_freq_mode)
+ 			set_low_bus_freq();
+-- 
+1.5.4.4
+

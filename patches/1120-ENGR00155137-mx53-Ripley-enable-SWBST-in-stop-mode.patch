@@ -1,0 +1,31 @@
+From 61e3b9d6d7bfdd8c9400e4a8462d20724c6e32be Mon Sep 17 00:00:00 2001
+From: Robin Gong <B38343@freescale.com>
+Date: Tue, 6 Sep 2011 15:01:56 +0800
+Subject: [PATCH] ENGR00155137 mx53 Ripley: enable SWBST in stop mode
+
+Because VUSB is supply by SWBST , we shouldn't off SWBST, otherwise
+VUSB will not kept in 3.3V , so there is no normal wakeup signal
+produced when USB device plug in or out after system go into stop
+mode.
+
+Signed-off-by: Robin Gong <B38343@freescale.com>
+---
+ arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c b/arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c
+index b2572b5..ca5a052 100644
+--- a/arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c
++++ b/arch/arm/mach-mx5/mx53_loco_pmic_mc34708.c
+@@ -73,7 +73,7 @@
+ 					| SW4B_MODE_VALUE | SW5_MODE_VALUE)
+ 
+ #define SWBST_MODE_MASK		(0x3 << 5)
+-#define SWBST_MODE_VALUE	(0x0 << 5)
++#define SWBST_MODE_VALUE	(0x2 << 5)	/*Auto mode*/
+ 
+ #define REG_SWBST_MODE_MASK	(SWBST_MODE_MASK)
+ #define REG_SWBST_MODE_VALUE	(SWBST_MODE_VALUE)
+-- 
+1.5.4.4
+

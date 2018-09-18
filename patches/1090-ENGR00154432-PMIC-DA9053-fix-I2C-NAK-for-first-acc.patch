@@ -1,0 +1,91 @@
+From 75530c5d1befb9e6a3406704f8eb6146e4b6b149 Mon Sep 17 00:00:00 2001
+From: Wayne Zou <b36644@freescale.com>
+Date: Mon, 8 Aug 2011 10:12:32 +0800
+Subject: [PATCH] ENGR00154432 PMIC DA9053:  fix I2C NAK for first access and shutdown issue
+
+During the platform boot up, during the platform does DA9053 Read/Write
+operation, it writes slave address and wait for ACK . Instead of ACK
+PMIC sends NAK. A workaround fix is provided as a part of retries
+fix I2C NAK for very first access.
+
+Also fix a bug when the system fails to start after software shutdown.
+
+Signed-off-by: Wayne Zou <b36644@freescale.com>
+---
+ drivers/mfd/da9052-core.c |   12 ++++++------
+ drivers/mfd/da9052-i2c.c  |   32 +++++++++++++++-----------------
+ 2 files changed, 21 insertions(+), 23 deletions(-)
+
+diff --git a/drivers/mfd/da9052-core.c b/drivers/mfd/da9052-core.c
+index 571006b..8783b76 100644
+--- a/drivers/mfd/da9052-core.c
++++ b/drivers/mfd/da9052-core.c
+@@ -536,17 +536,17 @@ void da9052_ssc_exit(struct da9052 *da9052)
+ void da9053_power_off(void)
+ {
+ 	struct da9052_ssc_msg ssc_msg;
++	struct da9052_ssc_msg ssc_msg_dummy[2];
+ 	if (!da9052_data)
+ 		return;
+ 
+ 	ssc_msg.addr = DA9052_CONTROLB_REG;
+ 	da9052_data->read(da9052_data, &ssc_msg);
+-	ssc_msg.data |= DA9052_CONTROLB_SHUTDOWN;
+-	pr_info("da9052 shutdown: DA9052_CONTROLB_REG=%x\n", ssc_msg.data);
+-	da9052_data->write(da9052_data, &ssc_msg);
+-	ssc_msg.addr = DA9052_GPID9_REG;
+-	ssc_msg.data = 0;
+-	da9052_data->read(da9052_data, &ssc_msg);
++	ssc_msg_dummy[0].addr = DA9052_CONTROLB_REG;
++	ssc_msg_dummy[0].data = ssc_msg.data | DA9052_CONTROLB_SHUTDOWN;
++	ssc_msg_dummy[1].addr = DA9052_GPID9_REG;
++	ssc_msg_dummy[1].data = 0;
++	da9052_data->write_many(da9052_data, &ssc_msg_dummy[0], 2);
+ }
+ 
+ int da9053_get_chip_version(void)
+diff --git a/drivers/mfd/da9052-i2c.c b/drivers/mfd/da9052-i2c.c
+index 4f05089..6209e97 100644
+--- a/drivers/mfd/da9052-i2c.c
++++ b/drivers/mfd/da9052-i2c.c
+@@ -21,23 +21,21 @@ static struct da9052 *da9052_i2c;
+ 
+ static int da9052_i2c_is_connected(void)
+ {
++	struct da9052_ssc_msg msg;
++	int retries = 10, ret = -1;
++
++	msg.addr = DA9052_INTERFACE_REG;
++	do {
++		/* Test i2c connectivity by reading the GPIO_0-1 register */
++		if (0 != da9052_i2c_read(da9052_i2c, &msg)) {
++			printk(KERN_INFO"da9052_i2c_is_connected - i2c read failed.....\n");
++		} else {
++			printk(KERN_INFO"da9052_i2c_is_connected - i2c read success....\n");
++			ret = 0;
++		}
++	} while (ret != 0 && retries--);
+ 
+-        struct da9052_ssc_msg msg;
+-
+-        //printk("Entered da9052_i2c_is_connected.............\n");
+-
+-        msg.addr = DA9052_INTERFACE_REG;
+-
+-        /* Test spi connectivity by performing read of the GPIO_0-1 register */
+-        if ( 0 != da9052_i2c_read(da9052_i2c, &msg)) {
+-                printk("da9052_i2c_is_connected - i2c read failed.............\n");
+-                return -1;
+-        }
+-        else {
+-               printk("da9052_i2c_is_connected - i2c read success..............\n");
+-                return 0;
+-        }
+-
++	return ret;
+ }
+ 
+ static int __devinit da9052_i2c_probe(struct i2c_client *client,
+-- 
+1.5.4.4
+

@@ -1,0 +1,47 @@
+From 5a4aeb9f6c445c9cbf1a80c878e38e685d765268 Mon Sep 17 00:00:00 2001
+From: Santosh Shilimkar <santosh.shilimkar@ti.com>
+Date: Thu, 30 Sep 2010 09:02:17 +0100
+Subject: [PATCH] ARM: 6419/1: mmu: Fix MT_MEMORY and MT_MEMORY_NONCACHED pte flags
+
+The commit f1a2481c0 sets up the default flags for MT_MEMORY and
+MT_MEMORY_NONCACHED memory types. L_PTE_USER flag is wrongly
+set as default for these entries so remove it. Also adding
+the 'L_PTE_WRITE' flag so that these pages become read-write
+instead of just being read-only
+
+[this stops them being exposed to userspace, which is the main
+concern here --rmk]
+
+Reported-by: Catalin Marinas <catalin.marinas@arm.com>
+Signed-off-by: Santosh Shilimkar <santosh.shilimkar@ti.com>
+Acked-by: Catalin Marinas <catalin.marinas@arm.com>
+Signed-off-by: Russell King <rmk+kernel@arm.linux.org.uk>
+---
+ arch/arm/mm/mmu.c |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/mm/mmu.c b/arch/arm/mm/mmu.c
+index 4cb7140..2109cb0 100644
+--- a/arch/arm/mm/mmu.c
++++ b/arch/arm/mm/mmu.c
+@@ -248,7 +248,7 @@ static struct mem_type mem_types[] = {
+ 	},
+ 	[MT_MEMORY] = {
+ 		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
+-				L_PTE_USER | L_PTE_EXEC,
++				L_PTE_WRITE | L_PTE_EXEC,
+ 		.prot_l1   = PMD_TYPE_TABLE,
+ 		.prot_sect = PMD_TYPE_SECT | PMD_SECT_AP_WRITE,
+ 		.domain    = DOMAIN_KERNEL,
+@@ -259,7 +259,7 @@ static struct mem_type mem_types[] = {
+ 	},
+ 	[MT_MEMORY_NONCACHED] = {
+ 		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
+-				L_PTE_USER | L_PTE_EXEC | L_PTE_MT_BUFFERABLE,
++				L_PTE_WRITE | L_PTE_EXEC | L_PTE_MT_BUFFERABLE,
+ 		.prot_l1   = PMD_TYPE_TABLE,
+ 		.prot_sect = PMD_TYPE_SECT | PMD_SECT_AP_WRITE,
+ 		.domain    = DOMAIN_KERNEL,
+-- 
+1.5.4.4
+

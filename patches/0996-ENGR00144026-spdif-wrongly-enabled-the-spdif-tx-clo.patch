@@ -1,0 +1,84 @@
+From 51a837c776f3dbe30b7daa81dfe5423f9477d5b6 Mon Sep 17 00:00:00 2001
+From: Xinyu Chen <xinyu.chen@freescale.com>
+Date: Wed, 25 May 2011 16:12:06 +0800
+Subject: [PATCH] ENGR00144026 spdif: wrongly enabled the spdif tx clock in resume callback
+
+SPDIF driver enables the spdif tx clock in resume callback by mistake,
+even the spdif pcm device is not opened.
+It disables the tx clock in suspend without checking the use count,
+so if tx clock is already disabled, the count still keeps 0 after do disable.
+Then in resume, enable the tx clock will wrongly enable the tx clock despite
+it has been enabled before suspend or not.
+
+Fix this bug by checking the use count in suspend routing, and
+correctly enable the tx clock.
+
+Signed-off-by: Xinyu Chen <xinyu.chen@freescale.com>
+---
+ sound/soc/codecs/mxc_spdif.c |   15 +++++++++++++--
+ 1 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/sound/soc/codecs/mxc_spdif.c b/sound/soc/codecs/mxc_spdif.c
+index 296d958..7b859ca 100644
+--- a/sound/soc/codecs/mxc_spdif.c
++++ b/sound/soc/codecs/mxc_spdif.c
+@@ -33,6 +33,7 @@
+ #include <sound/soc-dapm.h>
+ #include <sound/initval.h>
+ #include <mach/hardware.h>
++#include <mach/clock.h>
+ 
+ #include "mxc_spdif.h"
+ 
+@@ -78,6 +79,7 @@ struct mxc_spdif_priv {
+ 	struct snd_card *card;	/* ALSA SPDIF sound card handle */
+ 	struct snd_pcm *pcm;	/* ALSA spdif driver type handle */
+ 	atomic_t dpll_locked;	/* DPLL locked status */
++	int resume_clk;
+ };
+ 
+ struct spdif_mixer_control mxc_spdif_control;
+@@ -118,6 +120,7 @@ static void spdif_irq_sym_error(unsigned int bit, void *devid);
+ static void spdif_irq_valnogood(unsigned int bit, void *devid);
+ static void spdif_irq_cnew(unsigned int bit, void *devid);
+ 
++
+ /* irq function list */
+ static spdif_irq_func_t spdif_irq_handlers[] = {
+ 	spdif_irq_fifo,
+@@ -1121,7 +1124,11 @@ static int mxc_codec_suspend(struct platform_device *pdev, pm_message_t state)
+ 
+ 	spdif_priv = codec->drvdata;
+ 	plat_data = spdif_priv->plat_data;
+-	clk_disable(plat_data->spdif_clk);
++
++	if (clk_get_usecount(plat_data->spdif_clk)) {
++		clk_disable(plat_data->spdif_clk);
++		spdif_priv->resume_clk = 1;
++	}
+ 	clk_disable(plat_data->spdif_core_clk);
+ 
+ 	return 0;
+@@ -1141,7 +1148,10 @@ static int mxc_codec_resume(struct platform_device *pdev)
+ 	plat_data = spdif_priv->plat_data;
+ 
+ 	clk_enable(plat_data->spdif_core_clk);
+-	clk_enable(plat_data->spdif_clk);
++	if (spdif_priv->resume_clk) {
++		clk_enable(plat_data->spdif_clk);
++		spdif_priv->resume_clk = 0;
++	}
+ 	spdif_softreset();
+ 
+ 	return 0;
+@@ -1208,6 +1218,7 @@ static int __init mxc_spdif_probe(struct platform_device *pdev)
+ 	spdif_priv->reg_phys_base = res->start;
+ 	spdif_priv->reg_base = ioremap(res->start, res->end - res->start + 1);
+ 	spdif_priv->plat_data = plat_data;
++	spdif_priv->resume_clk = 0;
+ 
+ 	spdif_base_addr = (unsigned long)spdif_priv->reg_base;
+ 
+-- 
+1.5.4.4
+

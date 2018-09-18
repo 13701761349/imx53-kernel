@@ -1,0 +1,222 @@
+From a7a38b569f37c400824a75b32f2cb952d40dbc9f Mon Sep 17 00:00:00 2001
+From: Wayne Zou <b36644@freescale.com>
+Date: Wed, 10 Aug 2011 16:25:39 +0800
+Subject: [PATCH] ENGR00152844 pmic_wm8325: Add wm8325 driver support
+
+Add Wolfson PMIC WM8325 driver support
+
+Signed-off-by: Wayne Zou <b36644@freescale.com>
+---
+ drivers/mfd/wm831x-core.c       |   31 +++++++++++++++++++++++++++++--
+ drivers/mfd/wm831x-irq.c        |    9 +++++++--
+ drivers/regulator/wm831x-dcdc.c |   21 +++++++++++++++++++++
+ drivers/regulator/wm831x-ldo.c  |   23 +++++++++++++++++++++++
+ 4 files changed, 80 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/mfd/wm831x-core.c b/drivers/mfd/wm831x-core.c
+index 1a968f3..0bfa0af 100644
+--- a/drivers/mfd/wm831x-core.c
++++ b/drivers/mfd/wm831x-core.c
+@@ -95,6 +95,7 @@ enum wm831x_parent {
+ 	WM8311 = 0x8311,
+ 	WM8312 = 0x8312,
+ 	WM8320 = 0x8320,
++	WM8325 = 0x8325,
+ };
+ 
+ static int wm831x_reg_locked(struct wm831x *wm831x, unsigned short reg)
+@@ -434,6 +435,18 @@ static irqreturn_t wm831x_auxadc_irq(int irq, void *irq_data)
+ 	return IRQ_HANDLED;
+ }
+ 
++static struct wm831x *wm831x_export;
++
++void wm831x_poweroff_system(void)
++{
++	int ret;
++
++	ret = wm831x_reg_read(wm831x_export, WM831X_POWER_STATE);
++	ret &= ~(1 << 15);
++	wm831x_reg_write(wm831x_export, WM831X_POWER_STATE, ret);
++}
++EXPORT_SYMBOL_GPL(wm831x_poweroff_system);
++
+ /**
+  * wm831x_auxadc_read_uv: Read a voltage from the WM831x AUXADC
+  *
+@@ -1463,7 +1476,12 @@ static int wm831x_device_init(struct wm831x *wm831x, unsigned long id, int irq)
+ 		dev_err(wm831x->dev, "Failed to read parent ID: %d\n", ret);
+ 		goto err;
+ 	}
+-	if (ret != 0x6204) {
++
++	switch (ret) {
++	case 0x6204:
++	case 0x6246:
++		break;
++	default:
+ 		dev_err(wm831x->dev, "Device is not a WM831x: ID %x\n", ret);
+ 		ret = -EINVAL;
+ 		goto err;
+@@ -1533,6 +1551,12 @@ static int wm831x_device_init(struct wm831x *wm831x, unsigned long id, int irq)
+ 		dev_info(wm831x->dev, "WM8320 revision %c\n", 'A' + rev);
+ 		break;
+ 
++	case WM8325:
++		parent = WM8325;
++		wm831x->num_gpio = 12;
++		dev_info(wm831x->dev, "WM8325 revision %c\n", 'A' + rev);
++		break;
++
+ 	default:
+ 		dev_err(wm831x->dev, "Unknown WM831x device %04x\n", ret);
+ 		ret = -EINVAL;
+@@ -1602,9 +1626,10 @@ static int wm831x_device_init(struct wm831x *wm831x, unsigned long id, int irq)
+ 		break;
+ 
+ 	case WM8320:
++	case WM8325:
+ 		ret = mfd_add_devices(wm831x->dev, -1,
+ 				      wm8320_devs, ARRAY_SIZE(wm8320_devs),
+-				      NULL, 0);
++				      NULL, wm831x->irq_base);
+ 		break;
+ 
+ 	default:
+@@ -1755,6 +1780,7 @@ static int wm831x_i2c_probe(struct i2c_client *i2c,
+ 	wm831x->read_dev = wm831x_i2c_read_device;
+ 	wm831x->write_dev = wm831x_i2c_write_device;
+ 
++	wm831x_export = wm831x;
+ 	return wm831x_device_init(wm831x, id->driver_data, i2c->irq);
+ }
+ 
+@@ -1779,6 +1805,7 @@ static const struct i2c_device_id wm831x_i2c_id[] = {
+ 	{ "wm8311", WM8311 },
+ 	{ "wm8312", WM8312 },
+ 	{ "wm8320", WM8320 },
++	{ "wm8325", WM8325 },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(i2c, wm831x_i2c_id);
+diff --git a/drivers/mfd/wm831x-irq.c b/drivers/mfd/wm831x-irq.c
+index 7dabe4d..294183b 100644
+--- a/drivers/mfd/wm831x-irq.c
++++ b/drivers/mfd/wm831x-irq.c
+@@ -394,8 +394,13 @@ static int wm831x_irq_set_type(unsigned int irq, unsigned int type)
+ 
+ 	irq = irq - wm831x->irq_base;
+ 
+-	if (irq < WM831X_IRQ_GPIO_1 || irq > WM831X_IRQ_GPIO_11)
+-		return -EINVAL;
++	if (irq < WM831X_IRQ_GPIO_1 || irq > WM831X_IRQ_GPIO_11) {
++		/* Ignore internal-only IRQs */
++		if (irq >= 0 && irq < WM831X_NUM_IRQS)
++			return 0;
++		else
++			return -EINVAL;
++	}
+ 
+ 	switch (type) {
+ 	case IRQ_TYPE_EDGE_BOTH:
+diff --git a/drivers/regulator/wm831x-dcdc.c b/drivers/regulator/wm831x-dcdc.c
+index dbfaf59..dd7e9b9 100644
+--- a/drivers/regulator/wm831x-dcdc.c
++++ b/drivers/regulator/wm831x-dcdc.c
+@@ -422,11 +422,29 @@ static int wm831x_buckv_get_current_limit(struct regulator_dev *rdev)
+ 	return wm831x_dcdc_ilim[val & WM831X_DC1_HC_THR_MASK];
+ }
+ 
++static int wm831x_stby_enable(struct regulator_dev *reg)
++{
++	return 0;
++}
++
++static int wm831x_stby_disable(struct regulator_dev *reg)
++{
++	return 0;
++}
++
++static int wm831x_stby_set_mode(struct regulator_dev *reg, unsigned int mode)
++{
++	return 0;
++}
++
+ static struct regulator_ops wm831x_buckv_ops = {
+ 	.set_voltage = wm831x_buckv_set_voltage,
+ 	.get_voltage = wm831x_buckv_get_voltage,
+ 	.list_voltage = wm831x_buckv_list_voltage,
+ 	.set_suspend_voltage = wm831x_buckv_set_suspend_voltage,
++	.set_suspend_enable = wm831x_stby_enable,
++	.set_suspend_disable = wm831x_stby_disable,
++	.set_suspend_mode = wm831x_stby_set_mode,
+ 	.set_current_limit = wm831x_buckv_set_current_limit,
+ 	.get_current_limit = wm831x_buckv_get_current_limit,
+ 
+@@ -690,6 +708,9 @@ static struct regulator_ops wm831x_buckp_ops = {
+ 	.get_voltage = wm831x_buckp_get_voltage,
+ 	.list_voltage = wm831x_buckp_list_voltage,
+ 	.set_suspend_voltage = wm831x_buckp_set_suspend_voltage,
++	.set_suspend_enable = wm831x_stby_enable,
++	.set_suspend_disable = wm831x_stby_disable,
++	.set_suspend_mode = wm831x_stby_set_mode,
+ 
+ 	.is_enabled = wm831x_dcdc_is_enabled,
+ 	.enable = wm831x_dcdc_enable,
+diff --git a/drivers/regulator/wm831x-ldo.c b/drivers/regulator/wm831x-ldo.c
+index e686cdb..d62b59c 100644
+--- a/drivers/regulator/wm831x-ldo.c
++++ b/drivers/regulator/wm831x-ldo.c
+@@ -283,12 +283,29 @@ static unsigned int wm831x_gp_ldo_get_optimum_mode(struct regulator_dev *rdev,
+ 	return REGULATOR_MODE_NORMAL;
+ }
+ 
++static int wm831x_stby_enable(struct regulator_dev *reg)
++{
++	return 0;
++}
++
++static int wm831x_stby_disable(struct regulator_dev *reg)
++{
++	return 0;
++}
++
++static int wm831x_stby_set_mode(struct regulator_dev *reg, unsigned int mode)
++{
++	return 0;
++}
+ 
+ static struct regulator_ops wm831x_gp_ldo_ops = {
+ 	.list_voltage = wm831x_gp_ldo_list_voltage,
+ 	.get_voltage = wm831x_gp_ldo_get_voltage,
+ 	.set_voltage = wm831x_gp_ldo_set_voltage,
+ 	.set_suspend_voltage = wm831x_gp_ldo_set_suspend_voltage,
++	.set_suspend_enable = wm831x_stby_enable,
++	.set_suspend_disable = wm831x_stby_disable,
++	.set_suspend_mode = wm831x_stby_set_mode,
+ 	.get_mode = wm831x_gp_ldo_get_mode,
+ 	.set_mode = wm831x_gp_ldo_set_mode,
+ 	.get_status = wm831x_gp_ldo_get_status,
+@@ -550,6 +567,9 @@ static struct regulator_ops wm831x_aldo_ops = {
+ 	.get_voltage = wm831x_aldo_get_voltage,
+ 	.set_voltage = wm831x_aldo_set_voltage,
+ 	.set_suspend_voltage = wm831x_aldo_set_suspend_voltage,
++	.set_suspend_enable = wm831x_stby_enable,
++	.set_suspend_disable = wm831x_stby_disable,
++	.set_suspend_mode = wm831x_stby_set_mode,
+ 	.get_mode = wm831x_aldo_get_mode,
+ 	.set_mode = wm831x_aldo_set_mode,
+ 	.get_status = wm831x_aldo_get_status,
+@@ -738,6 +758,9 @@ static struct regulator_ops wm831x_alive_ldo_ops = {
+ 	.get_voltage = wm831x_alive_ldo_get_voltage,
+ 	.set_voltage = wm831x_alive_ldo_set_voltage,
+ 	.set_suspend_voltage = wm831x_alive_ldo_set_suspend_voltage,
++	.set_suspend_enable = wm831x_stby_enable,
++	.set_suspend_disable = wm831x_stby_disable,
++	.set_suspend_mode = wm831x_stby_set_mode,
+ 	.get_status = wm831x_alive_ldo_get_status,
+ 
+ 	.is_enabled = wm831x_ldo_is_enabled,
+-- 
+1.5.4.4
+

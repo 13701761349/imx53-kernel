@@ -1,0 +1,283 @@
+From 32866f4088a397d3586446b4e0c64bb740b8013f Mon Sep 17 00:00:00 2001
+From: Ranjani Vaidyanathan <ra5478@freescale.com>
+Date: Thu, 14 Jul 2011 16:09:21 -0500
+Subject: [PATCH] ENGR00153157: MX51- Fix random failure when exiting LPAPM mode.
+
+The system randomly hangs when exiting LPAPM mode on MX51.
+The root cause of the issue because the parent of
+periph_apm_clk cannot be changed when main_bus_clk is sourced
+from it.
+To fix the issue, we cannot use periph_apm_clk to source
+main_bus_clk in LPAPM mode. Instead we need to divide down
+PLL2 using dvfs_podf and use individual dividers to further
+reduce other clocks in PLL2 domain.
+
+Signed-off-by: Ranjani Vaidyanathan <ra5478@freescale.com>
+---
+ arch/arm/mach-mx5/bus_freq.c |  202 +++++++++++++++++++++++++++---------------
+ arch/arm/mach-mx5/clock.c    |    3 +-
+ 2 files changed, 131 insertions(+), 74 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/bus_freq.c b/arch/arm/mach-mx5/bus_freq.c
+index 03caf7b..2c1c7f8 100644
+--- a/arch/arm/mach-mx5/bus_freq.c
++++ b/arch/arm/mach-mx5/bus_freq.c
+@@ -255,53 +255,86 @@ void enter_lpapm_mode_mx50()
+ void enter_lpapm_mode_mx51()
+ {
+ 	u32 reg;
+-	/* Set PLL3 to 133Mhz if no-one is using it. */
+-	if (clk_get_usecount(pll3) == 0) {
+-		u32 pll3_rate = clk_get_rate(pll3);
++	unsigned long flags;
+ 
+-		clk_enable(pll3);
+-		clk_set_rate(pll3, clk_round_rate(pll3, 133000000));
++	clk_enable(gpc_dvfs_clk);
+ 
+-		/*Change the DDR freq to 133Mhz. */
+-		clk_set_rate(ddr_hf_clk,
+-		     clk_round_rate(ddr_hf_clk, ddr_low_rate));
++	spin_lock_irqsave(&freq_lock, flags);
+ 
+-		/* Set the parent of Periph_apm_clk to be PLL3 */
+-		clk_set_parent(periph_apm_clk, pll3);
+-		clk_set_parent(main_bus_clk, periph_apm_clk);
++	/*Change the DDR freq to 133Mhz. */
++	clk_set_rate(ddr_hf_clk,
++	     clk_round_rate(ddr_hf_clk, ddr_low_rate));
++
++	 /* Setup the GPC. */
++	reg = __raw_readl(MXC_GPC_VCR);
++	reg &= ~(MXC_GPCVCR_VINC_MASK | MXC_GPCVCR_VCNTU_MASK |
++				MXC_GPCVCR_VCNT_MASK);
++
++	reg |= (1 << MXC_GPCVCR_VCNTU_OFFSET) |
++			(0 << MXC_GPCVCR_VCNT_OFFSET);
++	__raw_writel(reg, MXC_GPC_VCR);
++
++	reg = __raw_readl(MXC_GPC_CNTR);
++	reg &= ~(MXC_GPCCNTR_ADU_MASK | MXC_GPCCNTR_FUPD_MASK);
++	reg |= MXC_GPCCNTR_FUPD;
++	__raw_writel(reg, MXC_GPC_CNTR);
++
++	/* Enable DVFS-PER */
++	reg = __raw_readl(MXC_DVFSPER_PMCR0);
++	reg &= ~(MXC_DVFSPER_PMCR0_UDCS_MASK |
++				MXC_DVFSPER_PMCR0_ENABLE_MASK);
++	reg |= MXC_DVFSPER_PMCR0_ENABLE;
++	__raw_writel(reg, MXC_DVFSPER_PMCR0);
++
++	/* Set the dvfs-podf to divide by 4. */
++	reg = __raw_readl(MXC_CCM_CDCR);
++	reg &= ~MXC_CCM_CDCR_PERIPH_CLK_DVFS_PODF_MASK;
++	reg |= 3 << MXC_CCM_CDCR_PERIPH_CLK_DVFS_PODF_OFFSET;
++	__raw_writel(reg, MXC_CCM_CDCR);
++
++	/* Setup the GPC */
++	reg = __raw_readl(MXC_GPC_VCR) & ~MXC_GPCVCR_VINC_MASK;
++	/* Set VINC to 0. */
++	reg |= 0 << MXC_GPCVCR_VINC_OFFSET;
++	__raw_writel(reg, MXC_GPC_VCR);
++
++	reg = __raw_readl(MXC_GPC_CNTR);
++	reg |= MXC_GPCCNTR_STRT;
++	__raw_writel(reg, MXC_GPC_CNTR);
++
++	while (__raw_readl(MXC_GPC_CNTR) & MXC_GPCCNTR_STRT)
++		udelay(10);
+ 
+-		/* Set the dividers to be  1, so the clock rates
+-		  * are at 133MHz.
+-		  */
+-		reg = __raw_readl(MXC_CCM_CBCDR);
+-		reg &= ~(MXC_CCM_CBCDR_AXI_A_PODF_MASK
+-				| MXC_CCM_CBCDR_AXI_B_PODF_MASK
+-				| MXC_CCM_CBCDR_AHB_PODF_MASK
+-				| MXC_CCM_CBCDR_EMI_PODF_MASK
+-				| MXC_CCM_CBCDR_NFC_PODF_OFFSET);
+-		reg |= (0 << MXC_CCM_CBCDR_AXI_A_PODF_OFFSET
+-				| 0 << MXC_CCM_CBCDR_AXI_B_PODF_OFFSET
+-				| 0 << MXC_CCM_CBCDR_AHB_PODF_OFFSET
+-				| 0 << MXC_CCM_CBCDR_EMI_PODF_OFFSET
+-				| 3 << MXC_CCM_CBCDR_NFC_PODF_OFFSET);
+-		__raw_writel(reg, MXC_CCM_CBCDR);
++	/* Disable DVFS-PER */
++	reg = __raw_readl(MXC_DVFSPER_PMCR0);
++	reg &= ~MXC_DVFSPER_PMCR0_ENABLE;
++	__raw_writel(reg, MXC_DVFSPER_PMCR0);
+ 
+-		clk_enable(emi_garb_clk);
+-		while (__raw_readl(MXC_CCM_CDHIPR) & 0x1F)
+-			udelay(10);
+-		clk_disable(emi_garb_clk);
++	/* Set the dividers to be  close to 24Mhz from 166.25MHz*/
++	reg = __raw_readl(MXC_CCM_CBCDR);
++	reg &= ~(MXC_CCM_CBCDR_AXI_A_PODF_MASK
++			| MXC_CCM_CBCDR_AXI_B_PODF_MASK
++			| MXC_CCM_CBCDR_AHB_PODF_MASK
++			| MXC_CCM_CBCDR_EMI_PODF_MASK
++			| MXC_CCM_CBCDR_NFC_PODF_OFFSET);
++	reg |= (6 << MXC_CCM_CBCDR_AXI_A_PODF_OFFSET
++		| 6 << MXC_CCM_CBCDR_AXI_B_PODF_OFFSET
++		| 6 << MXC_CCM_CBCDR_AHB_PODF_OFFSET
++		| 6 << MXC_CCM_CBCDR_EMI_PODF_OFFSET
++		| 3 << MXC_CCM_CBCDR_NFC_PODF_OFFSET);
+ 
+-		low_bus_freq_mode = 1;
+-		high_bus_freq_mode = 0;
+-		med_bus_freq_mode = 0;
++	__raw_writel(reg, MXC_CCM_CBCDR);
+ 
+-		/* Set the source of Periph_APM_Clock to be lp-apm. */
+-		clk_set_parent(periph_apm_clk, lp_apm);
++	while (__raw_readl(MXC_CCM_CDHIPR) & 0x1F)
++		udelay(10);
+ 
+-		/* Set PLL3 back to original rate. */
+-		clk_set_rate(pll3, clk_round_rate(pll3, pll3_rate));
+-		clk_disable(pll3);
+-	}
++	spin_unlock_irqrestore(&freq_lock, flags);
++
++	clk_set_parent(main_bus_clk, pll2);
++
++	low_bus_freq_mode = 1;
++	high_bus_freq_mode = 0;
++	med_bus_freq_mode = 0;
+ }
+ 
+ void enter_lpapm_mode_mx53()
+@@ -603,51 +636,70 @@ void exit_lpapm_mode_mx50(int high_bus_freq)
+ void exit_lpapm_mode_mx51()
+ {
+ 	u32 reg;
++	unsigned long flags;
+ 
+-	/* Temporarily Set the dividers  is PLL3.
+-	 * No clock rate is above 133MHz.
+-	 */
+-	reg = __raw_readl(MXC_CCM_CBCDR);
+-	reg &= ~(MXC_CCM_CBCDR_AXI_A_PODF_MASK
+-		| MXC_CCM_CBCDR_AXI_B_PODF_MASK
+-		| MXC_CCM_CBCDR_AHB_PODF_MASK
+-		| MXC_CCM_CBCDR_EMI_PODF_MASK
+-		| MXC_CCM_CBCDR_NFC_PODF_OFFSET);
+-	reg |= (1 << MXC_CCM_CBCDR_AXI_A_PODF_OFFSET
+-		| 1 << MXC_CCM_CBCDR_AXI_B_PODF_OFFSET
+-		| 1 << MXC_CCM_CBCDR_AHB_PODF_OFFSET
+-		| 1 << MXC_CCM_CBCDR_EMI_PODF_OFFSET
+-		| 3 << MXC_CCM_CBCDR_NFC_PODF_OFFSET);
+-	__raw_writel(reg, MXC_CCM_CBCDR);
+-
+-	clk_enable(emi_garb_clk);
+-	while (__raw_readl(MXC_CCM_CDHIPR) & 0x1F)
+-		udelay(10);
+-	clk_disable(emi_garb_clk);
+-
+-	clk_set_parent(periph_apm_clk, pll3);
++	spin_lock_irqsave(&freq_lock, flags);
+ 
+-	/* Set the dividers to the default dividers */
+ 	reg = __raw_readl(MXC_CCM_CBCDR);
+ 	reg &= ~(MXC_CCM_CBCDR_AXI_A_PODF_MASK
+-		| MXC_CCM_CBCDR_AXI_B_PODF_MASK
+-		| MXC_CCM_CBCDR_AHB_PODF_MASK
+-		| MXC_CCM_CBCDR_EMI_PODF_MASK
+-		| MXC_CCM_CBCDR_NFC_PODF_OFFSET);
++			| MXC_CCM_CBCDR_AXI_B_PODF_MASK
++			| MXC_CCM_CBCDR_AHB_PODF_MASK
++			| MXC_CCM_CBCDR_EMI_PODF_MASK
++			| MXC_CCM_CBCDR_NFC_PODF_OFFSET);
+ 	reg |= (3 << MXC_CCM_CBCDR_AXI_A_PODF_OFFSET
+-		| 4 << MXC_CCM_CBCDR_AXI_B_PODF_OFFSET
+-		| 4 << MXC_CCM_CBCDR_AHB_PODF_OFFSET
+-		| 4 << MXC_CCM_CBCDR_EMI_PODF_OFFSET
+-		| 3 << MXC_CCM_CBCDR_NFC_PODF_OFFSET);
++			| 4 << MXC_CCM_CBCDR_AXI_B_PODF_OFFSET
++			| 4 << MXC_CCM_CBCDR_AHB_PODF_OFFSET
++			| 4 << MXC_CCM_CBCDR_EMI_PODF_OFFSET
++			| 3 << MXC_CCM_CBCDR_NFC_PODF_OFFSET);
+ 	__raw_writel(reg, MXC_CCM_CBCDR);
+-
+-	clk_enable(emi_garb_clk);
+ 	while (__raw_readl(MXC_CCM_CDHIPR) & 0x1F)
+ 		udelay(10);
+ 
++	/* Setup the GPC. */
++	reg = __raw_readl(MXC_GPC_VCR);
++	reg &= ~(MXC_GPCVCR_VINC_MASK | MXC_GPCVCR_VCNTU_MASK |
++			MXC_GPCVCR_VCNT_MASK);
++
++	reg |= (1 << MXC_GPCVCR_VCNTU_OFFSET) |
++	     (0 << MXC_GPCVCR_VCNT_OFFSET);
++	__raw_writel(reg, MXC_GPC_VCR);
++
++	reg = __raw_readl(MXC_GPC_CNTR);
++	reg &= ~(MXC_GPCCNTR_ADU_MASK | MXC_GPCCNTR_FUPD_MASK);
++	reg |= MXC_GPCCNTR_FUPD;
++	__raw_writel(reg, MXC_GPC_CNTR);
++
++	/* Enable DVFS-PER */
++	reg = __raw_readl(MXC_DVFSPER_PMCR0);
++	reg |= MXC_DVFSPER_PMCR0_UDCS;
++	reg |= MXC_DVFSPER_PMCR0_ENABLE;
++	__raw_writel(reg, MXC_DVFSPER_PMCR0);
++
++	/* Set the dvfs-podf to divide by 1. */
++	reg = __raw_readl(MXC_CCM_CDCR);
++	reg &= ~MXC_CCM_CDCR_PERIPH_CLK_DVFS_PODF_MASK;
++	reg |= 0 << MXC_CCM_CDCR_PERIPH_CLK_DVFS_PODF_OFFSET;
++	__raw_writel(reg, MXC_CCM_CDCR);
++
++	/* Setup the GPC */
++	reg = __raw_readl(MXC_GPC_VCR) & ~MXC_GPCVCR_VINC_MASK;
++	/* Set VINC to 1. */
++	reg |= 1 << MXC_GPCVCR_VINC_OFFSET;
++	__raw_writel(reg, MXC_GPC_VCR);
++
++	reg = __raw_readl(MXC_GPC_CNTR);
++	reg |= MXC_GPCCNTR_STRT;
++	__raw_writel(reg, MXC_GPC_CNTR);
++	while (__raw_readl(MXC_GPC_CNTR) & MXC_GPCCNTR_STRT)
++		udelay(10);
++
++	/* Disable DVFS-PER */
++	reg = __raw_readl(MXC_DVFSPER_PMCR0);
++	reg &= ~MXC_DVFSPER_PMCR0_ENABLE;
++	__raw_writel(reg, MXC_DVFSPER_PMCR0);
++
+ 	low_bus_freq_mode = 0;
+ 	high_bus_freq_mode = 1;
+-	clk_disable(emi_garb_clk);
+ 
+ 	/*Set the main_bus_clk parent to be PLL2. */
+ 	clk_set_parent(main_bus_clk, pll2);
+@@ -655,6 +707,10 @@ void exit_lpapm_mode_mx51()
+ 	/*Change the DDR freq to 200MHz*/
+ 	clk_set_rate(ddr_hf_clk,
+ 	    clk_round_rate(ddr_hf_clk, ddr_normal_rate));
++
++	spin_unlock_irqrestore(&freq_lock, flags);
++
++	clk_disable(gpc_dvfs_clk);
+ }
+ 
+ void exit_lpapm_mode_mx53()
+diff --git a/arch/arm/mach-mx5/clock.c b/arch/arm/mach-mx5/clock.c
+index 1f924c6..5c08b1d 100644
+--- a/arch/arm/mach-mx5/clock.c
++++ b/arch/arm/mach-mx5/clock.c
+@@ -674,7 +674,8 @@ static unsigned long _clk_main_bus_get_rate(struct clk *clk)
+ {
+ 	u32 div = 0;
+ 
+-	if (dvfs_per_divider_active() || low_bus_freq_mode)
++	if (cpu_is_mx51() &&
++		(dvfs_per_divider_active() || low_bus_freq_mode))
+ 		div  = (__raw_readl(MXC_CCM_CDCR) & 0x3);
+ 	return clk_get_rate(clk->parent) / (div + 1);
+ }
+-- 
+1.5.4.4
+

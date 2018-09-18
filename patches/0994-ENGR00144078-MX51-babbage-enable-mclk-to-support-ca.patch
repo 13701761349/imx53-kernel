@@ -1,0 +1,62 @@
+From 6684fb2fbccfae7abdf272c1a2c3ec95989275e1 Mon Sep 17 00:00:00 2001
+From: Yuxi Sun <b36102@freescale.com>
+Date: Thu, 26 May 2011 14:48:28 +0800
+Subject: [PATCH] ENGR00144078 MX51 babbage: enable mclk to support camera do rotation
+
+Before configure camera embedded rotate funtion, mclk is enbabled
+to allow register access,and after configure is done, mclk is
+disabled.
+
+Signed-off-by: Yuxi Sun <b36102@freescale.com>
+---
+ drivers/media/video/mxc/capture/mxc_v4l2_capture.c |   16 ++++++++++++++++
+ 1 files changed, 16 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/media/video/mxc/capture/mxc_v4l2_capture.c b/drivers/media/video/mxc/capture/mxc_v4l2_capture.c
+index 982dcea..ded1839 100644
+--- a/drivers/media/video/mxc/capture/mxc_v4l2_capture.c
++++ b/drivers/media/video/mxc/capture/mxc_v4l2_capture.c
+@@ -1036,24 +1036,40 @@ static int mxc_v4l2_s_ctrl(cam_data *cam, struct v4l2_control *c)
+ 			tmp_rotation = IPU_ROTATE_90_LEFT;
+ 			break;
+ 		case V4L2_MXC_CAM_ROTATE_NONE:
++			ipu_csi_enable_mclk_if(CSI_MCLK_I2C, cam->csi,
++					true, true);
+ 			if (vidioc_int_s_ctrl(cam->sensor, c)) {
+ 				ret = -EINVAL;
+ 			}
++			ipu_csi_enable_mclk_if(CSI_MCLK_I2C, cam->csi,
++					false, false);
+ 			break;
+ 		case V4L2_MXC_CAM_ROTATE_VERT_FLIP:
++			ipu_csi_enable_mclk_if(CSI_MCLK_I2C, cam->csi,
++					true, true);
+ 			if (vidioc_int_s_ctrl(cam->sensor, c)) {
+ 				ret = -EINVAL;
+ 			}
++			ipu_csi_enable_mclk_if(CSI_MCLK_I2C, cam->csi,
++					false, false);
+ 			break;
+ 		case V4L2_MXC_CAM_ROTATE_HORIZ_FLIP:
++			ipu_csi_enable_mclk_if(CSI_MCLK_I2C, cam->csi,
++					true, true);
+ 			if (vidioc_int_s_ctrl(cam->sensor, c)) {
+ 				ret = -EINVAL;
+ 			}
++			ipu_csi_enable_mclk_if(CSI_MCLK_I2C, cam->csi,
++					false, false);
+ 			break;
+ 		case V4L2_MXC_CAM_ROTATE_180:
++			ipu_csi_enable_mclk_if(CSI_MCLK_I2C, cam->csi,
++					true, true);
+ 			if (vidioc_int_s_ctrl(cam->sensor, c)) {
+ 				ret = -EINVAL;
+ 			}
++			ipu_csi_enable_mclk_if(CSI_MCLK_I2C, cam->csi,
++					false, false);
+ 			break;
+ 		default:
+ 			ret = -EINVAL;
+-- 
+1.5.4.4
+

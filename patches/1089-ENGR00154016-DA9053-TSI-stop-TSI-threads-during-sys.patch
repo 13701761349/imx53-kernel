@@ -1,0 +1,98 @@
+From c87039fda69de9bc8d5db128a57e72cd861d9bc5 Mon Sep 17 00:00:00 2001
+From: Wayne Zou <b36644@freescale.com>
+Date: Mon, 1 Aug 2011 10:29:16 +0800
+Subject: [PATCH] ENGR00154016 DA9053 TSI: stop TSI threads during system idle and no touch event
+
+Changes Made
+--------------
+1) On Pen UP the TSI threads are stopped and
+On Pen DOWN TSI threads are started
+2) Removed TSI thread creation from Probe,
+instead creating the TSI threads when PEN DOWN
+
+Expected Output
+-------------------
+1) TSI threads to stop either when system is suspended or,
+there is no touch event.Thus conserving power during system
+suspend, idle and no touch event.
+2) TSI threads to start only on touch event and not when system is resumed.
+3) On system Start/Restart TSI threads will not be created and started till
+the touch detection.
+
+Signed-off-by: Wayne Zou <b36644@freescale.com>
+---
+ drivers/input/touchscreen/da9052_tsi.c |   37 +++++++++++++++++++++----------
+ 1 files changed, 25 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/input/touchscreen/da9052_tsi.c b/drivers/input/touchscreen/da9052_tsi.c
+index c6ff49e..96a4f02 100644
+--- a/drivers/input/touchscreen/da9052_tsi.c
++++ b/drivers/input/touchscreen/da9052_tsi.c
+@@ -543,18 +543,6 @@ static ssize_t __init da9052_tsi_init_drv(struct da9052_ts_priv *priv)
+ 
+ 	da9052_init_tsi_fifos(priv);
+ 
+-	init_completion(&priv->tsi_reg_proc_thread.notifier);
+-	priv->tsi_reg_proc_thread.state = ACTIVE;
+-	priv->tsi_reg_proc_thread.pid =
+-				kernel_thread(da9052_tsi_reg_proc_thread,
+-					priv, CLONE_KERNEL | SIGCHLD);
+-
+-	init_completion(&priv->tsi_raw_proc_thread.notifier);
+-	priv->tsi_raw_proc_thread.state = ACTIVE;
+-	priv->tsi_raw_proc_thread.pid =
+-				kernel_thread(da9052_tsi_raw_proc_thread,
+-					priv, CLONE_KERNEL | SIGCHLD);
+-
+ 	ret = da9052_tsi_config_state(priv, DEFAULT_TSI_STATE);
+ 	if (ret) {
+ 		for (cnt = 0; cnt < NUM_INPUT_DEVS; cnt++) {
+@@ -1159,6 +1147,8 @@ static void da9052_tsi_penup_event(struct da9052_ts_priv *priv)
+ 	priv->early_data_flag = TRUE;
+ 	priv->debounce_over = FALSE;
+ 	priv->win_reference_valid = FALSE;
++	priv->tsi_reg_proc_thread.state = INACTIVE;
++	priv->tsi_raw_proc_thread.state = INACTIVE;
+ 
+ 	printk(KERN_DEBUG "The raw data count is %d\n", priv->raw_data_cnt);
+ 	printk(KERN_DEBUG "The OS data count is %d\n", priv->os_data_cnt);
+@@ -1218,6 +1208,25 @@ void da9052_tsi_pen_down_handler(struct da9052_eh_nb *eh_data, u32 event)
+ 
+ 	tsi_reg.tsi_state =  SAMPLING_ACTIVE;
+ 
++	init_completion(&priv->tsi_reg_proc_thread.notifier);
++	priv->tsi_reg_proc_thread.state = ACTIVE;
++	priv->tsi_reg_proc_thread.thread_task =
++	kthread_run(da9052_tsi_reg_proc_thread, (void *)priv, "da9052_tsi_reg");
++	if (IS_ERR(priv->tsi_reg_proc_thread.thread_task)) {
++		printk(KERN_ERR "da9052: failed to create kthread tsi_reg");
++		priv->tsi_reg_proc_thread.thread_task = NULL;
++		goto fail;
++	}
++
++	init_completion(&priv->tsi_raw_proc_thread.notifier);
++	priv->tsi_raw_proc_thread.state = ACTIVE;
++	priv->tsi_raw_proc_thread.thread_task =
++	kthread_run(da9052_tsi_raw_proc_thread, (void *)priv, "da9052_tsi_raw");
++	if (IS_ERR(priv->tsi_raw_proc_thread.thread_task)) {
++		printk(KERN_ERR "da9052: failed to create kthread tsi_raw");
++		priv->tsi_raw_proc_thread.thread_task = NULL;
++		goto fail;
++	}
+ 	goto success;
+ 
+ fail:
+@@ -1345,6 +1354,10 @@ static s32 da9052_tsi_get_rawdata(struct da9052_tsi_reg *buf, u8 cnt) {
+ static ssize_t da9052_tsi_suspend(struct platform_device *dev, 
+ 							pm_message_t state)
+ {
++	struct da9052_ts_priv *priv = platform_get_drvdata(dev);
++
++	priv->tsi_reg_proc_thread.state = INACTIVE;
++	priv->tsi_raw_proc_thread.state = INACTIVE;
+ 	printk(KERN_INFO "%s: called\n", __FUNCTION__);
+ 	return 0;
+ }
+-- 
+1.5.4.4
+

@@ -1,0 +1,93 @@
+From 7fde84cd9e0b699281a5e9b7201950b2953df59e Mon Sep 17 00:00:00 2001
+From: Zhang Jiejing <jiejing.zhang@freescale.com>
+Date: Thu, 23 Jun 2011 16:12:47 +0800
+Subject: [PATCH] ENGR00151334 MX5X: disable dvfs_core when system poweroff.
+
+This Patch is fix for the reboot bug, our mx51,mx53 will hang after
+reboot more then 20 times(100%).
+
+We found this bug is caused by enable dvfs, so this patch disable
+dvfs when system poweroff.
+
+kernel panic log is like:
+
+Kernel panic: (attached full logs)
+MXC Watchdog # 0 shutdown
+Restarting system.
+Unable to handle kernel paging request at virtual address fffffffc
+pgd = 99e54000
+[fffffffc] *pgd=90ce6021, *pte=00000000, *ppte=00000000
+Internal error: Oops: 817 [#1] PREEMPT
+last sysfs file: /sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state
+Modules linked in:
+CPU: 0    Not tainted  (2.6.35.3-01072-gb754390 #1)
+PC is at 0x99ce02bc
+LR is at 0x84de7d4b
+pc : [<99ce02bc>]    lr : [<84de7d4b>]    psr: 20000013
+sp : 99ce1e68  ip : 00004076  fp : 00000000
+r10: f9ffffff  r9 : 00000068  r8 : 8003a104
+r7 : 00000000  r6 : 0000203c  r5 : 28121969  r4 : 00000000
+r3 : ec860ad4  r2 : 00000000  r1 : 00000000  r0 : fffffffc
+Flags: nzCv  IRQs on  FIQs on  Mode SVC_32  ISA ARM  Segment user
+Control: 10c5387d  Table: a9e54019  DAC: 00000015
+Process reboot (pid: 2484, stack limit = 0x99ce02e8)
+Stack: (0x99ce1e68 to 0x99ce2000)
+1e60:                   00000000 00000000 80042690 8003aff0 00000000 28121969
+1e80: 01234567 8003aa54 00000000 8007a438 00000000 99ce1ed4 980029d0 99ce1ed4
+1ea0: 000508fb 99ce1f14 99ce0000 800ee880 00000000 800a6fc8 99ce1edc 980029d0
+1ec0: 00000000 8009f6b8 0000000e 99ce1ef8 980029d0 00000000 00000000 99ce1f94
+1ee0: 99ce0000 800ee880 00000000 800a5a9c 99ce1ef8 8009f7ec 00000001 00000000
+1f00: 00000000 7fffffff 00000000 00000000 00000000 00000000 ffffffff 508fb800
+1f20: 00000000 508fb7ff 00000000 99ce1f94 99ce0000 800ee880 00000000 8009f784
+1f40: 508fb7ff 00000000 99ce1e8c 00000000 980029d0 99a21640 808c4d0c 800a00a0
+1f60: 99a21800 99ce0000 99a21800 800ce5b4 0001b6dc 7e90caf4 00000001 00000024
+1f80: 8003a104 99ce0000 00000000 800ee7ac 00000001 0001b6dc 7e90caf4 00000001
+1fa0: 00000058 80039f80 0001b6dc 7e90caf4 fee1dead 28121969 01234567 00000000
+1fc0: 0001b6dc 7e90caf4 00000001 00000058 00017047 00000000 00000000 00000000
+1fe0: 0001b804 7e90ca88 6fd17763 6fd0c3ec 60000010 fee1dead 00000000 00000000
+Code: 00000000 40000000 00000000 80039e90 (f4000000)
+---[ end trace 7f263b4201ae9f59 ]---
+Kernel panic - not syncing: Fatal exception
+[<8003e578>] (unwind_backtrace+0x0/0xf0) from [<8046e83c>] (panic+0x6c/0xe0)
+[<8046e83c>] (panic+0x6c/0xe0) from [<8003d420>] (die+0x2b4/0x304)
+[<8003d420>] (die+0x2b4/0x304) from [<8003f3e8>] (__do_kernel_fault+0x64/0x84)
+[<8003f3e8>] (__do_kernel_fault+0x64/0x84) from [<8003f5c8>]
+(do_page_fault+0x1c0/0x1d4)
+[<8003f5c8>] (do_page_fault+0x1c0/0x1d4) from [<800392c8>]
+(do_DataAbort+0x34/0x94)
+[<800392c8>] (do_DataAbort+0x34/0x94) from [<80039a2c>] (__dabt_svc+0x4c/0x60)
+Exception stack(0x99ce1e20 to 0x99ce1e68)
+1e20: fffffffc 00000000 00000000 ec860ad4 00000000 28121969 0000203c 00000000
+1e40: 8003a104 00000068 f9ffffff 00000000 00004076 99ce1e68 84de7d4b 99ce02bc
+1e60: 20000013 ffffffff
+[<80039a2c>] (__dabt_svc+0x4c/0x60) from [<99ce02bc>] (0x99ce02bc)
+
+Signed-off-by: Zhang Jiejing <jiejing.zhang@freescale.com>
+---
+ arch/arm/plat-mxc/dvfs_core.c |    7 +++++++
+ 1 files changed, 7 insertions(+), 0 deletions(-)
+
+diff --git a/arch/arm/plat-mxc/dvfs_core.c b/arch/arm/plat-mxc/dvfs_core.c
+index e10abb2..f8a397f 100644
+--- a/arch/arm/plat-mxc/dvfs_core.c
++++ b/arch/arm/plat-mxc/dvfs_core.c
+@@ -969,9 +969,16 @@ static int mxc_dvfs_core_resume(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++static void mxc_dvfscore_shutdown(struct device *dev)
++{
++	dev_info(dev, "disable dvfs during shutdown");
++	stop_dvfs();
++}
++
+ static struct platform_driver mxc_dvfs_core_driver = {
+ 	.driver = {
+ 		   .name = "mxc_dvfs_core",
++		   .shutdown = mxc_dvfscore_shutdown,
+ 		   },
+ 	.probe = mxc_dvfs_core_probe,
+ 	.suspend = mxc_dvfs_core_suspend,
+-- 
+1.5.4.4
+

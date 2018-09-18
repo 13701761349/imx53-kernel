@@ -1,0 +1,1014 @@
+From 296008eeb85aadb3e0a4ad070d778989cf534685 Mon Sep 17 00:00:00 2001
+From: Wayne Zou <b36644@freescale.com>
+Date: Wed, 20 Jul 2011 14:23:00 +0800
+Subject: [PATCH] ENGR00153378 MX53 cleanup pm suspend/resume source code V2
+
+restructure the pm suspend/resume routines as mxc_pm_platform_data,
+so split the SOC pm routines from machine pm routines.
+
+Signed-off-by: Wayne Zou <b36644@freescale.com>
+---
+ arch/arm/mach-mx5/Makefile    |    6 +-
+ arch/arm/mach-mx5/mx53_loco.c |   48 ++++++
+ arch/arm/mach-mx5/mx53_smd.c  |   54 +++++++-
+ arch/arm/mach-mx5/pm.c        |   69 +--------
+ arch/arm/mach-mx5/pm_da9053.c |  325 ++++-------------------------------------
+ arch/arm/mach-mx5/pm_i2c.c    |  257 ++++++++++++++++++++++++++++++++
+ arch/arm/mach-mx5/pmic.h      |    3 +
+ 7 files changed, 399 insertions(+), 363 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/Makefile b/arch/arm/mach-mx5/Makefile
+index 4d795a7..1c148e5 100644
+--- a/arch/arm/mach-mx5/Makefile
++++ b/arch/arm/mach-mx5/Makefile
+@@ -8,15 +8,15 @@ sdram_autogating.o bus_freq.o usb_dr.o usb_h1.o usb_h2.o dummy_gpio.o  early_set
+ check_fuse.o
+ 
+ obj-$(CONFIG_ARCH_MX51) += clock.o suspend.o
+-obj-$(CONFIG_ARCH_MX53) += clock.o suspend.o mx53_wp.o pm_da9053.o
++obj-$(CONFIG_ARCH_MX53) += clock.o suspend.o mx53_wp.o
+ obj-$(CONFIG_ARCH_MX50) += clock_mx50.o dmaengine.o dma-apbh.o mx50_suspend.o mx50_freq.o mx50_ddr_freq.o mx50_wfi.o
+ 
+ obj-$(CONFIG_MACH_MX51_3DS) += mx51_3stack.o mx51_3stack_gpio.o mx51_3stack_pmic_mc13892.o
+ obj-$(CONFIG_MACH_MX51_BABBAGE) += mx51_babbage.o mx51_babbage_pmic_mc13892.o
+ obj-$(CONFIG_MACH_MX53_EVK) += mx53_evk.o mx53_evk_pmic_mc13892.o
+ obj-$(CONFIG_MACH_MX53_ARD) += mx53_ard.o mx53_ard_pmic_ltc3589.o
+-obj-$(CONFIG_MACH_MX53_SMD) += mx53_smd.o mx53_smd_pmic_da9053.o
+-obj-$(CONFIG_MACH_MX53_LOCO) += mx53_loco.o mx53_loco_pmic_mc34708.o mx53_loco_pmic_da9053.o
++obj-$(CONFIG_MACH_MX53_SMD) += mx53_smd.o pm_i2c.o pm_da9053.o mx53_smd_pmic_da9053.o
++obj-$(CONFIG_MACH_MX53_LOCO) += mx53_loco.o pm_i2c.o pm_da9053.o mx53_loco_pmic_mc34708.o mx53_loco_pmic_da9053.o
+ obj-$(CONFIG_MACH_MX50_ARM2) += mx50_arm2.o mx50_arm2_pmic_mc13892.o
+ obj-$(CONFIG_MACH_MX50_RDP) += mx50_rdp.o mx50_rdp_pmic_mc13892.o mx50_rdp_pmic_mc34708.o
+ obj-$(CONFIG_MXC_BLUETOOTH_RFKILL) += mx53_smd_rfkill.o
+diff --git a/arch/arm/mach-mx5/mx53_loco.c b/arch/arm/mach-mx5/mx53_loco.c
+index e86da0a..10c5d14 100644
+--- a/arch/arm/mach-mx5/mx53_loco.c
++++ b/arch/arm/mach-mx5/mx53_loco.c
+@@ -108,6 +108,14 @@
+ #define NIRQ				(6*32 + 11)	/* GPIO7_11 */
+ #define MX53_LOCO_MC34708_IRQ    (4*32 + 30)	/* GPIO5_30 CSI0_DAT12 */
+ 
++#define MX53_OFFSET					(0x20000000)
++#define TZIC_WAKEUP0_OFFSET         (0x0E00)
++#define TZIC_WAKEUP1_OFFSET         (0x0E04)
++#define TZIC_WAKEUP2_OFFSET         (0x0E08)
++#define TZIC_WAKEUP3_OFFSET         (0x0E0C)
++#define GPIO7_0_11_IRQ_BIT			(0x1<<11)
++
++extern void pm_i2c_init(u32 base_addr);
+ static iomux_v3_cfg_t mx53_loco_pads[] = {
+ 	/* FEC */
+ 	MX53_PAD_FEC_MDC__FEC_MDC,
+@@ -254,6 +262,44 @@ static iomux_v3_cfg_t mx53_loco_pads[] = {
+ 	MX53_PAD_GPIO_8__GPIO1_8,
+ };
+ 
++static void loco_da9053_irq_wakeup_only_fixup(void)
++{
++	void __iomem *tzic_base;
++	tzic_base = ioremap(MX53_TZIC_BASE_ADDR, SZ_4K);
++	if (NULL == tzic_base) {
++		pr_err("fail to map MX53_TZIC_BASE_ADDR\n");
++		return;
++	}
++	__raw_writel(0, tzic_base + TZIC_WAKEUP0_OFFSET);
++	__raw_writel(0, tzic_base + TZIC_WAKEUP1_OFFSET);
++	__raw_writel(0, tzic_base + TZIC_WAKEUP2_OFFSET);
++	/* only enable irq wakeup for da9053 */
++	__raw_writel(GPIO7_0_11_IRQ_BIT, tzic_base + TZIC_WAKEUP3_OFFSET);
++	iounmap(tzic_base);
++	pr_info("only da9053 irq is wakeup-enabled\n");
++}
++
++static void loco_suspend_enter(void)
++{
++	if (!board_is_mx53_loco_mc34708()) {
++		loco_da9053_irq_wakeup_only_fixup();
++		da9053_suspend_cmd_sw();
++	}
++}
++
++static void loco_suspend_exit(void)
++{
++	if (!board_is_mx53_loco_mc34708()) {
++		if (da9053_get_chip_version())
++			da9053_restore_volt_settings();
++	}
++}
++
++static struct mxc_pm_platform_data loco_pm_data = {
++	.suspend_enter = loco_suspend_enter,
++	.suspend_exit = loco_suspend_exit,
++};
++
+ static struct fb_videomode video_modes[] = {
+ 	{
+ 	 /* 800x480 @ 57 Hz , pixel clk @ 27MHz */
+@@ -865,6 +911,7 @@ static void __init mxc_board_init(void)
+ 	if (!mxc_fuse_get_gpu_status())
+ 		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxcscc_device, NULL);
++	mxc_register_device(&pm_device, &loco_pm_data);
+ 	mxc_register_device(&mxc_dvfs_core_device, &dvfs_core_data);
+ 	mxc_register_device(&busfreq_device, &bus_freq_data);
+ 	mxc_register_device(&mxc_iim_device, &iim_data);
+@@ -903,6 +950,7 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_v4l2out_device, NULL);
+ 	loco_add_device_buttons();
+ 	pm_power_off = da9053_power_off;
++	pm_i2c_init(I2C1_BASE_ADDR - MX53_OFFSET);
+ }
+ 
+ static void __init mx53_loco_timer_init(void)
+diff --git a/arch/arm/mach-mx5/mx53_smd.c b/arch/arm/mach-mx5/mx53_smd.c
+index 0563075..94566fa 100644
+--- a/arch/arm/mach-mx5/mx53_smd.c
++++ b/arch/arm/mach-mx5/mx53_smd.c
+@@ -69,6 +69,7 @@
+ #include "crm_regs.h"
+ #include "devices.h"
+ #include "usb.h"
++#include "pmic.h"
+ 
+ /*!
+  * @file mach-mx5/mx53_smd.c
+@@ -152,7 +153,15 @@
+ #define MX53_SMD_PMIC_INT			(6*32 + 11)	/* GPIO_7_11 */
+ #define MX53_SMD_CAP_TCH_FUN1		(6*32 + 13)	/* GPIO_7_13 */
+ 
++#define MX53_OFFSET					(0x20000000)
++#define TZIC_WAKEUP0_OFFSET         (0x0E00)
++#define TZIC_WAKEUP1_OFFSET         (0x0E04)
++#define TZIC_WAKEUP2_OFFSET         (0x0E08)
++#define TZIC_WAKEUP3_OFFSET         (0x0E0C)
++#define GPIO7_0_11_IRQ_BIT			(0x1<<11)
++
+ extern int __init mx53_smd_init_da9052(void);
++extern void pm_i2c_init(u32 base_addr);
+ 
+ static iomux_v3_cfg_t mx53_smd_pads[] = {
+ 	/* DI_VGA_HSYNC */
+@@ -418,6 +427,48 @@ static iomux_v3_cfg_t mx53_smd_pads[] = {
+ 	MX53_PAD_LVDS1_TX0_P__LDB_LVDS1_TX0,
+ };
+ 
++static void smd_da9053_irq_wakeup_only_fixup(void)
++{
++	void __iomem *tzic_base;
++	tzic_base = ioremap(MX53_TZIC_BASE_ADDR, SZ_4K);
++	if (NULL == tzic_base) {
++		pr_err("fail to map MX53_TZIC_BASE_ADDR\n");
++		return;
++	}
++	__raw_writel(0, tzic_base + TZIC_WAKEUP0_OFFSET);
++	__raw_writel(0, tzic_base + TZIC_WAKEUP1_OFFSET);
++	__raw_writel(0, tzic_base + TZIC_WAKEUP2_OFFSET);
++	/* only enable irq wakeup for da9053 */
++	__raw_writel(GPIO7_0_11_IRQ_BIT, tzic_base + TZIC_WAKEUP3_OFFSET);
++	iounmap(tzic_base);
++	pr_info("only da9053 irq is wakeup-enabled\n");
++}
++
++static void smd_suspend_enter(void)
++{
++	if (board_is_rev(BOARD_REV_4)) {
++		smd_da9053_irq_wakeup_only_fixup();
++		da9053_suspend_cmd_sw();
++	} else {
++		if (da9053_get_chip_version() !=
++			DA9053_VERSION_BB)
++			smd_da9053_irq_wakeup_only_fixup();
++
++		da9053_suspend_cmd_hw();
++	}
++}
++
++static void smd_suspend_exit(void)
++{
++	if (da9053_get_chip_version())
++		da9053_restore_volt_settings();
++}
++
++static struct mxc_pm_platform_data smd_pm_data = {
++	.suspend_enter = smd_suspend_enter,
++	.suspend_exit = smd_suspend_exit,
++};
++
+ static struct fb_videomode video_modes[] = {
+ 	{
+ 	 /* 800x480 @ 57 Hz , pixel clk @ 27MHz */
+@@ -1211,6 +1262,7 @@ static void __init mxc_board_init(void)
+ 	if (!mxc_fuse_get_gpu_status())
+ 		mxc_register_device(&gpu_device, &gpu_data);
+ 	mxc_register_device(&mxcscc_device, NULL);
++	mxc_register_device(&pm_device, &smd_pm_data);
+ 	mxc_register_device(&mxc_dvfs_core_device, &dvfs_core_data);
+ 	mxc_register_device(&busfreq_device, &bus_freq_data);
+ 	mxc_register_device(&mxc_iim_device, &iim_data);
+@@ -1257,7 +1309,7 @@ static void __init mxc_board_init(void)
+ 	mxc_register_device(&mxc_bt_rfkill, &mxc_bt_rfkill_data);
+ 	smd_add_device_buttons();
+ 	smd_add_device_battery();
+-
++	pm_i2c_init(I2C1_BASE_ADDR - MX53_OFFSET);
+ }
+ 
+ static void __init mx53_smd_timer_init(void)
+diff --git a/arch/arm/mach-mx5/pm.c b/arch/arm/mach-mx5/pm.c
+index 60de321..a8acfbe 100644
+--- a/arch/arm/mach-mx5/pm.c
++++ b/arch/arm/mach-mx5/pm.c
+@@ -24,7 +24,6 @@
+ #include <linux/cpufreq.h>
+ #include <linux/iram_alloc.h>
+ #include <linux/fsl_devices.h>
+-#include <linux/mfd/da9052/da9052.h>
+ #include <asm/mach-types.h>
+ #include <asm/cacheflush.h>
+ #include <asm/tlb.h>
+@@ -38,7 +37,6 @@
+ #define DATABAHN_CTL_REG19	0x4c
+ #define DATABAHN_CTL_REG79	0x13c
+ #define DATABAHN_PHY_REG25	0x264
+-#define MX53_OFFSET 0x20000000
+ 
+ static struct cpu_wp *cpu_wp_tbl;
+ static int cpu_wp_nr;
+@@ -55,7 +53,6 @@ extern int cpufreq_suspended;
+ extern int set_cpu_freq(int wp);
+ #endif
+ 
+-
+ static struct device *pm_dev;
+ struct clk *gpc_dvfs_clk;
+ extern void cpu_do_suspend_workaround(u32 sdclk_iomux_addr);
+@@ -63,40 +60,12 @@ extern void mx50_suspend(u32 databahn_addr);
+ extern struct cpu_wp *(*get_cpu_wp)(int *wp);
+ extern void __iomem *ccm_base;
+ extern void __iomem *databahn_base;
+-extern void da9053_suspend_cmd_hw(void);
+-extern int da9053_restore_volt_settings(void);
+-extern void da9053_suspend_cmd_sw(void);
+-extern void da9053_resume_dump(void);
+-extern void pm_da9053_i2c_init(u32 base_addr);
+ 
+ extern int iram_ready;
+ void *suspend_iram_base;
+ void (*suspend_in_iram)(void *param1, void *param2, void* param3) = NULL;
+ void __iomem *suspend_param1;
+ 
+-#define TZIC_WAKEUP0_OFFSET            0x0E00
+-#define TZIC_WAKEUP1_OFFSET            0x0E04
+-#define TZIC_WAKEUP2_OFFSET            0x0E08
+-#define TZIC_WAKEUP3_OFFSET            0x0E0C
+-#define GPIO7_0_11_IRQ_BIT			   (0x1<<11)
+-
+-static void mx53_smd_loco_irq_wake_fixup(void)
+-{
+-	void __iomem *tzic_base;
+-	tzic_base = ioremap(MX53_TZIC_BASE_ADDR, SZ_4K);
+-	if (NULL == tzic_base) {
+-		pr_err("fail to map MX53_TZIC_BASE_ADDR\n");
+-		return;
+-	}
+-	__raw_writel(0, tzic_base + TZIC_WAKEUP0_OFFSET);
+-	__raw_writel(0, tzic_base + TZIC_WAKEUP1_OFFSET);
+-	__raw_writel(0, tzic_base + TZIC_WAKEUP2_OFFSET);
+-	/* only enable irq wakeup for da9053 */
+-	__raw_writel(GPIO7_0_11_IRQ_BIT, tzic_base + TZIC_WAKEUP3_OFFSET);
+-	iounmap(tzic_base);
+-	pr_info("only da9053 irq is wakeup-enabled\n");
+-}
+-
+ static int mx5_suspend_enter(suspend_state_t state)
+ {
+ 	if (gpc_dvfs_clk == NULL)
+@@ -121,41 +90,17 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 		local_flush_tlb_all();
+ 		flush_cache_all();
+ 
++		if (pm_data->suspend_enter)
++			pm_data->suspend_enter();
+ 		if (cpu_is_mx51() || cpu_is_mx53()) {
+-			if (machine_is_mx53_smd() ||
+-				(machine_is_mx53_loco() &&
+-				(!board_is_mx53_loco_mc34708()))) {
+-				if (board_is_rev(BOARD_REV_4) ||
+-					machine_is_mx53_loco()) {
+-					mx53_smd_loco_irq_wake_fixup();
+-					da9053_suspend_cmd_sw();
+-				} else {
+-				/*  for new OTP DA9053 board,
+-					enable other irq for wakeup,
+-					otherwise disable other wakeup sources.
+-				*/
+-					if (da9053_get_chip_version() !=
+-						DA9053_VERSION_BB)
+-						mx53_smd_loco_irq_wake_fixup();
+-
+-					da9053_suspend_cmd_hw();
+-				}
+-			}
+ 			/* Run the suspend code from iRAM. */
+ 			suspend_in_iram(suspend_param1, NULL, NULL);
+-			if (machine_is_mx53_smd() ||
+-				(machine_is_mx53_loco() &&
+-				(!board_is_mx53_loco_mc34708())))
+-				if (da9053_get_chip_version())
+-					da9053_restore_volt_settings();
++
+ 			/*clear the EMPGC0/1 bits */
+ 			__raw_writel(0, MXC_SRPG_EMPGC0_SRPGCR);
+ 			__raw_writel(0, MXC_SRPG_EMPGC1_SRPGCR);
+ 		} else {
+ 			if (cpu_is_mx50()) {
+-				if (pm_data->suspend_enter)
+-					pm_data->suspend_enter();
+-
+ 				/* Store the LPM mode of databanhn */
+ 				databahn_mode = __raw_readl(
+ 					databahn_base + DATABAHN_CTL_REG20);
+@@ -168,10 +113,10 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 				__raw_writel(databahn_mode,
+ 					databahn_base + DATABAHN_CTL_REG20);
+ 
+-				if (pm_data->suspend_exit)
+-					pm_data->suspend_exit();
+ 			}
+ 		}
++		if (pm_data->suspend_exit)
++			pm_data->suspend_exit();
+ 	} else {
+ 			cpu_do_idle();
+ 	}
+@@ -324,10 +269,6 @@ static int __init pm_init(void)
+ 	}
+ 	printk(KERN_INFO "PM driver module loaded\n");
+ 
+-	if (machine_is_mx53_smd() ||
+-		machine_is_mx53_loco())
+-		pm_da9053_i2c_init(I2C1_BASE_ADDR - MX53_OFFSET);
+-
+ 	return 0;
+ }
+ 
+diff --git a/arch/arm/mach-mx5/pm_da9053.c b/arch/arm/mach-mx5/pm_da9053.c
+index b75cdda..63eda3a 100644
+--- a/arch/arm/mach-mx5/pm_da9053.c
++++ b/arch/arm/mach-mx5/pm_da9053.c
+@@ -33,231 +33,38 @@
+ #include <asm/mach-types.h>
+ #include <mach/hardware.h>
+ #include <mach/i2c.h>
++#include "pmic.h"
+ 
+ /** Defines ********************************************************************
+ *******************************************************************************/
++/* have to hard-code the preset voltage here for they share the register
++as the normal setting on Da9053 */
++/* preset buck core to 850 mv */
++#define BUCKCORE_SUSPEND_PRESET 0xCE
++/* preset buck core to 950 mv */
++#define BUCKPRO_SUSPEND_PRESET 0xD2
++/* preset ldo6 to 1200 mv */
++#define LDO6_SUSPEND_PRESET 0xC0
++/* preset ldo10 to 1200 mv */
++#define iLDO10_SUSPEND_PRESET 0xC0
++/* set VUSB 2V5 active during suspend */
++#define BUCKPERI_SUSPEND_SW_STEP 0x50
++/* restore VUSB 2V5 active after suspend */
++#define BUCKPERI_RESTORE_SW_STEP 0x55
++/* restore VUSB 2V5 power supply after suspend */
++#define SUPPLY_RESTORE_VPERISW_EN 0x20
++#define CONF_BIT 0x80
+ 
++#define DA9053_SLEEP_DELAY 0x1f
++#define DA9052_CONTROLC_SMD_SET 0x62
++#define DA9052_GPIO0809_SMD_SET 0x18
++#define DA9052_ID1415_SMD_SET   0x1
++#define DA9052_GPI9_IRQ_MASK    0x2
+ 
+-/* IMX I2C registers */
+-#define IMX_I2C_IADR	0x00	/* i2c slave address */
+-#define IMX_I2C_IFDR	0x04	/* i2c frequency divider */
+-#define IMX_I2C_I2CR	0x08	/* i2c control */
+-#define IMX_I2C_I2SR	0x0C	/* i2c status */
+-#define IMX_I2C_I2DR	0x10	/* i2c transfer data */
+-
+-/* Bits of IMX I2C registers */
+-#define I2SR_RXAK	0x01
+-#define I2SR_IIF	0x02
+-#define I2SR_SRW	0x04
+-#define I2SR_IAL	0x10
+-#define I2SR_IBB	0x20
+-#define I2SR_IAAS	0x40
+-#define I2SR_ICF	0x80
+-#define I2CR_RSTA	0x04
+-#define I2CR_TXAK	0x08
+-#define I2CR_MTX	0x10
+-#define I2CR_MSTA	0x20
+-#define I2CR_IIEN	0x40
+-#define I2CR_IEN	0x80
+-
+-static void __iomem		*base;
+-static int stopped;
+-
+-/** Functions for IMX I2C adapter driver ***************************************
+-*******************************************************************************/
+-
+-static int pm_i2c_imx_bus_busy(int for_busy)
+-{
+-	unsigned int temp;
+-
+-	while (1) {
+-		temp = readb(base + IMX_I2C_I2SR);
+-		if (for_busy && (temp & I2SR_IBB))
+-			break;
+-		if (!for_busy && !(temp & I2SR_IBB))
+-			break;
+-		pr_debug("waiting bus busy=%d\n", for_busy);
+-	}
+-
+-	return 0;
+-}
+-
+-static int pm_i2c_imx_trx_complete(void)
+-{
+-	unsigned int temp;
+-	while (!((temp = readb(base + IMX_I2C_I2SR)) & I2SR_IIF))
+-		pr_debug("waiting or I2SR_IIF\n");
+-	temp &= ~I2SR_IIF;
+-	writeb(temp, base + IMX_I2C_I2SR);
+-
+-	return 0;
+-}
+-
+-static int pm_i2c_imx_acked(void)
+-{
+-	if (readb(base + IMX_I2C_I2SR) & I2SR_RXAK) {
+-		pr_info("<%s> No ACK\n", __func__);
+-		return -EIO;  /* No ACK */
+-	}
+-	return 0;
+-}
+-
+-static int pm_i2c_imx_start(void)
+-{
+-	unsigned int temp = 0;
+-	int result;
+-
+-	/* Enable I2C controller */
+-	writeb(0, base + IMX_I2C_I2SR);
+-	writeb(I2CR_IEN, base + IMX_I2C_I2CR);
+-
+-	/* Wait controller to be stable */
+-	udelay(50);
+-
+-	/* Start I2C transaction */
+-	temp = readb(base + IMX_I2C_I2CR);
+-	temp |= I2CR_MSTA;
+-	writeb(temp, base + IMX_I2C_I2CR);
+-	result = pm_i2c_imx_bus_busy(1);
+-
+-	temp |= I2CR_IIEN | I2CR_MTX | I2CR_TXAK;
+-	writeb(temp, base + IMX_I2C_I2CR);
+-	return result;
+-}
+-
+-static void pm_i2c_imx_stop(void)
+-{
+-	unsigned int temp = 0;
+-
+-	/* Stop I2C transaction */
+-	temp = readb(base + IMX_I2C_I2CR);
+-	temp &= ~(I2CR_MSTA | I2CR_MTX);
+-	writeb(temp, base + IMX_I2C_I2CR);
+-
+-	pm_i2c_imx_bus_busy(0);
+-
+-	/* Disable I2C controller */
+-	writeb(0, base + IMX_I2C_I2CR);
+-}
+-
+-static int pm_i2c_imx_write(struct i2c_msg *msgs)
+-{
+-	int i, result;
+-
+-	/* write slave address */
+-	writeb(msgs->addr << 1, base + IMX_I2C_I2DR);
+-	result = pm_i2c_imx_trx_complete();
+-	if (result)
+-		return result;
+-	result = pm_i2c_imx_acked();
+-	if (result)
+-		return result;
+-
+-	/* write data */
+-	for (i = 0; i < msgs->len; i++) {
+-		writeb(msgs->buf[i], base + IMX_I2C_I2DR);
+-		result = pm_i2c_imx_trx_complete();
+-		if (result)
+-			return result;
+-		result = pm_i2c_imx_acked();
+-		if (result)
+-			return result;
+-	}
+-	return 0;
+-}
+-
+-static int pm_i2c_imx_read(struct i2c_msg *msgs)
+-{
+-	int i, result;
+-	unsigned int temp;
+-
+-	/* write slave address */
+-	writeb((msgs->addr << 1) | 0x01, base + IMX_I2C_I2DR);
+-	result = pm_i2c_imx_trx_complete();
+-	if (result)
+-		return result;
+-	result = pm_i2c_imx_acked();
+-	if (result)
+-		return result;
+-
+-	/* setup bus to read data */
+-	temp = readb(base + IMX_I2C_I2CR);
+-	temp &= ~I2CR_MTX;
+-	if (msgs->len - 1)
+-		temp &= ~I2CR_TXAK;
+-	writeb(temp, base + IMX_I2C_I2CR);
+-	readb(base + IMX_I2C_I2DR); /* dummy read */
+-
+-	/* read data */
+-	for (i = 0; i < msgs->len; i++) {
+-		result = pm_i2c_imx_trx_complete();
+-		if (result)
+-			return result;
+-		if (i == (msgs->len - 1)) {
+-			/* It must generate STOP before read I2DR to prevent
+-			   controller from generating another clock cycle */
+-			temp = readb(base + IMX_I2C_I2CR);
+-			temp &= ~(I2CR_MSTA | I2CR_MTX);
+-			writeb(temp, base + IMX_I2C_I2CR);
+-			pm_i2c_imx_bus_busy(0);
+-			stopped = 1;
+-		} else if (i == (msgs->len - 2)) {
+-			temp = readb(base + IMX_I2C_I2CR);
+-			temp |= I2CR_TXAK;
+-			writeb(temp, base + IMX_I2C_I2CR);
+-		}
+-		msgs->buf[i] = readb(base + IMX_I2C_I2DR);
+-	}
+-	return 0;
+-}
+-
+-int pm_i2c_imx_xfer(struct i2c_msg *msgs, int num)
+-{
+-	unsigned int i, temp;
+-	int result;
+-
+-	/* Start I2C transfer */
+-	result = pm_i2c_imx_start();
+-	if (result)
+-		goto fail0;
+-
+-	/* read/write data */
+-	for (i = 0; i < num; i++) {
+-		if (i) {
+-			temp = readb(base + IMX_I2C_I2CR);
+-			temp |= I2CR_RSTA;
+-			writeb(temp, base + IMX_I2C_I2CR);
+-			result =  pm_i2c_imx_bus_busy(1);
+-			if (result)
+-				goto fail0;
+-		}
+-		/* write/read data */
+-		if (msgs[i].flags & I2C_M_RD)
+-			result = pm_i2c_imx_read(&msgs[i]);
+-		else
+-			result = pm_i2c_imx_write(&msgs[i]);
+-		if (result)
+-			goto fail0;
+-	}
+-
+-fail0:
+-	/* Stop I2C transfer */
+-	pm_i2c_imx_stop();
+-
+-	return (result < 0) ? result : num;
+-}
+-
+-void pm_da9053_i2c_init(u32 base_addr)
+-{
+-	base = ioremap(base_addr, SZ_4K);
+-}
+-
+-void pm_da9053_i2c_deinit(void)
+-{
+-	iounmap(base);
+-}
++static u8 volt_settings[DA9052_LDO10_REG - DA9052_BUCKCORE_REG + 1];
++extern int pm_i2c_imx_xfer(struct i2c_msg *msgs, int num);
+ 
+-void pm_da9053_read_reg(u8 reg, u8 *value)
++static void pm_da9053_read_reg(u8 reg, u8 *value)
+ {
+ 	unsigned char buf[2] = {0, 0};
+ 	struct i2c_msg i2cmsg[2];
+@@ -278,7 +85,7 @@ void pm_da9053_read_reg(u8 reg, u8 *value)
+ 	*value = buf[1];
+ }
+ 
+-void pm_da9053_write_reg(u8 reg, u8 value)
++static void pm_da9053_write_reg(u8 reg, u8 value)
+ {
+ 	unsigned char buf[2] = {0, 0};
+ 	struct i2c_msg i2cmsg[2];
+@@ -291,25 +98,6 @@ void pm_da9053_write_reg(u8 reg, u8 value)
+ 	pm_i2c_imx_xfer(i2cmsg, 1);
+ }
+ 
+-/* have to hard-code the preset voltage here for they share the register
+-as the normal setting on Da9053 */
+-/* preset buck core to 850 mv */
+-#define BUCKCORE_SUSPEND_PRESET 0xCE
+-/* preset buck core to 950 mv */
+-#define BUCKPRO_SUSPEND_PRESET 0xD2
+-/* preset ldo6 to 1200 mv */
+-#define LDO6_SUSPEND_PRESET 0xC0
+-/* preset ldo10 to 1200 mv */
+-#define iLDO10_SUSPEND_PRESET 0xC0
+-/* set VUSB 2V5 active during suspend */
+-#define BUCKPERI_SUSPEND_SW_STEP 0x50
+-/* restore VUSB 2V5 active after suspend */
+-#define BUCKPERI_RESTORE_SW_STEP 0x55
+-/* restore VUSB 2V5 power supply after suspend */
+-#define SUPPLY_RESTORE_VPERISW_EN 0x20
+-#define CONF_BIT 0x80
+-
+-static u8 volt_settings[DA9052_LDO10_REG - DA9052_BUCKCORE_REG + 1];
+ static void pm_da9053_preset_voltage(void)
+ {
+ 	u8 reg, data;
+@@ -327,7 +115,8 @@ static void pm_da9053_preset_voltage(void)
+ 	pm_da9053_write_reg(DA9052_ID1213_REG, BUCKPERI_SUSPEND_SW_STEP);
+ }
+ 
+-void pm_da9053_dump(int start, int end)
++#if 0
++static void pm_da9053_dump(int start, int end)
+ {
+ 	u8 reg, data;
+ 	for (reg = start; reg <= end; reg++) {
+@@ -336,13 +125,7 @@ void pm_da9053_dump(int start, int end)
+ 			reg, data);
+ 	}
+ }
+-
+-#define DA9053_SLEEP_DELAY 0x1f
+-
+-#define DA9052_CONTROLC_SMD_SET 0x62
+-#define DA9052_GPIO0809_SMD_SET 0x18
+-#define DA9052_ID1415_SMD_SET   0x1
+-#define DA9052_GPI9_IRQ_MASK    0x2
++#endif
+ 
+ int da9053_suspend_cmd_sw(void)
+ {
+@@ -375,7 +158,6 @@ int da9053_suspend_cmd_sw(void)
+ 	return 0;
+ }
+ 
+-
+ int da9053_suspend_cmd_hw(void)
+ {
+ 	unsigned char buf[2] = {0, 0};
+@@ -438,50 +220,3 @@ int da9053_restore_volt_settings(void)
+ 	clk_put(i2c_clk);
+ 	return 0;
+ }
+-
+-int da9053_poweroff_cmd(void)
+-{
+-	unsigned char buf[2] = {0, 0};
+-	struct clk *i2c_clk;
+-	u8 data;
+-	buf[0] = 29;
+-
+-	i2c_clk = clk_get(NULL, "i2c_clk");
+-	if (IS_ERR(i2c_clk)) {
+-		pr_err("unable to get i2c clk\n");
+-		return PTR_ERR(i2c_clk);
+-	}
+-	clk_enable(i2c_clk);
+-
+-	pm_da9053_read_reg(DA9052_CONTROLB_REG, &data);
+-	data |= DA9052_CONTROLB_SHUTDOWN;
+-	pm_da9053_write_reg(DA9052_CONTROLB_REG, data);
+-
+-	clk_disable(i2c_clk);
+-	clk_put(i2c_clk);
+-	return 0;
+-}
+-
+-int da9053_resume_dump(void)
+-{
+-	unsigned char buf[2] = {0, 0};
+-	struct clk *i2c_clk;
+-	buf[0] = 29;
+-
+-	i2c_clk = clk_get(NULL, "i2c_clk");
+-	if (IS_ERR(i2c_clk)) {
+-		pr_err("unable to get i2c clk\n");
+-		return PTR_ERR(i2c_clk);
+-	}
+-	clk_enable(i2c_clk);
+-
+-	pm_da9053_dump(46, 59);
+-	pm_da9053_dump(25, 25);
+-	pm_da9053_dump(29, 29);
+-	pm_da9053_dump(36, 36);
+-
+-	clk_disable(i2c_clk);
+-	clk_put(i2c_clk);
+-	return 0;
+-}
+-
+diff --git a/arch/arm/mach-mx5/pm_i2c.c b/arch/arm/mach-mx5/pm_i2c.c
+new file mode 100644
+index 0000000..5284631
+--- /dev/null
++++ b/arch/arm/mach-mx5/pm_i2c.c
+@@ -0,0 +1,257 @@
++/*
++ * Copyright (C) 2011 Freescale Semiconductor, Inc. All Rights Reserved.
++ */
++
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/errno.h>
++#include <linux/err.h>
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/io.h>
++#include <linux/clk.h>
++
++#include <asm/mach-types.h>
++#include <mach/hardware.h>
++#include <mach/i2c.h>
++
++/** Defines ********************************************************************
++*******************************************************************************/
++
++
++/* IMX I2C registers */
++#define IMX_I2C_IADR	0x00	/* i2c slave address */
++#define IMX_I2C_IFDR	0x04	/* i2c frequency divider */
++#define IMX_I2C_I2CR	0x08	/* i2c control */
++#define IMX_I2C_I2SR	0x0C	/* i2c status */
++#define IMX_I2C_I2DR	0x10	/* i2c transfer data */
++
++/* Bits of IMX I2C registers */
++#define I2SR_RXAK	0x01
++#define I2SR_IIF	0x02
++#define I2SR_SRW	0x04
++#define I2SR_IAL	0x10
++#define I2SR_IBB	0x20
++#define I2SR_IAAS	0x40
++#define I2SR_ICF	0x80
++#define I2CR_RSTA	0x04
++#define I2CR_TXAK	0x08
++#define I2CR_MTX	0x10
++#define I2CR_MSTA	0x20
++#define I2CR_IIEN	0x40
++#define I2CR_IEN	0x80
++
++static void __iomem		*base;
++static int stopped;
++
++/** Functions for IMX I2C adapter driver ***************************************
++*******************************************************************************/
++
++static int pm_i2c_imx_bus_busy(int for_busy)
++{
++	unsigned int temp;
++
++	while (1) {
++		temp = readb(base + IMX_I2C_I2SR);
++		if (for_busy && (temp & I2SR_IBB))
++			break;
++		if (!for_busy && !(temp & I2SR_IBB))
++			break;
++		pr_debug("waiting bus busy=%d\n", for_busy);
++	}
++
++	return 0;
++}
++
++static int pm_i2c_imx_trx_complete(void)
++{
++	unsigned int temp;
++	while (!((temp = readb(base + IMX_I2C_I2SR)) & I2SR_IIF))
++		pr_debug("waiting or I2SR_IIF\n");
++	temp &= ~I2SR_IIF;
++	writeb(temp, base + IMX_I2C_I2SR);
++
++	return 0;
++}
++
++static int pm_i2c_imx_acked(void)
++{
++	if (readb(base + IMX_I2C_I2SR) & I2SR_RXAK) {
++		pr_info("<%s> No ACK\n", __func__);
++		return -EIO;  /* No ACK */
++	}
++	return 0;
++}
++
++static int pm_i2c_imx_start(void)
++{
++	unsigned int temp = 0;
++	int result;
++
++	/* Enable I2C controller */
++	writeb(0, base + IMX_I2C_I2SR);
++	writeb(I2CR_IEN, base + IMX_I2C_I2CR);
++
++	/* Wait controller to be stable */
++	udelay(50);
++
++	/* Start I2C transaction */
++	temp = readb(base + IMX_I2C_I2CR);
++	temp |= I2CR_MSTA;
++	writeb(temp, base + IMX_I2C_I2CR);
++	result = pm_i2c_imx_bus_busy(1);
++
++	temp |= I2CR_IIEN | I2CR_MTX | I2CR_TXAK;
++	writeb(temp, base + IMX_I2C_I2CR);
++	return result;
++}
++
++static void pm_i2c_imx_stop(void)
++{
++	unsigned int temp = 0;
++
++	/* Stop I2C transaction */
++	temp = readb(base + IMX_I2C_I2CR);
++	temp &= ~(I2CR_MSTA | I2CR_MTX);
++	writeb(temp, base + IMX_I2C_I2CR);
++
++	pm_i2c_imx_bus_busy(0);
++
++	/* Disable I2C controller */
++	writeb(0, base + IMX_I2C_I2CR);
++}
++
++static int pm_i2c_imx_write(struct i2c_msg *msgs)
++{
++	int i, result;
++
++	/* write slave address */
++	writeb(msgs->addr << 1, base + IMX_I2C_I2DR);
++	result = pm_i2c_imx_trx_complete();
++	if (result)
++		return result;
++	result = pm_i2c_imx_acked();
++	if (result)
++		return result;
++
++	/* write data */
++	for (i = 0; i < msgs->len; i++) {
++		writeb(msgs->buf[i], base + IMX_I2C_I2DR);
++		result = pm_i2c_imx_trx_complete();
++		if (result)
++			return result;
++		result = pm_i2c_imx_acked();
++		if (result)
++			return result;
++	}
++	return 0;
++}
++
++static int pm_i2c_imx_read(struct i2c_msg *msgs)
++{
++	int i, result;
++	unsigned int temp;
++
++	/* write slave address */
++	writeb((msgs->addr << 1) | 0x01, base + IMX_I2C_I2DR);
++	result = pm_i2c_imx_trx_complete();
++	if (result)
++		return result;
++	result = pm_i2c_imx_acked();
++	if (result)
++		return result;
++
++	/* setup bus to read data */
++	temp = readb(base + IMX_I2C_I2CR);
++	temp &= ~I2CR_MTX;
++	if (msgs->len - 1)
++		temp &= ~I2CR_TXAK;
++	writeb(temp, base + IMX_I2C_I2CR);
++	readb(base + IMX_I2C_I2DR); /* dummy read */
++
++	/* read data */
++	for (i = 0; i < msgs->len; i++) {
++		result = pm_i2c_imx_trx_complete();
++		if (result)
++			return result;
++		if (i == (msgs->len - 1)) {
++			/* It must generate STOP before read I2DR to prevent
++			   controller from generating another clock cycle */
++			temp = readb(base + IMX_I2C_I2CR);
++			temp &= ~(I2CR_MSTA | I2CR_MTX);
++			writeb(temp, base + IMX_I2C_I2CR);
++			pm_i2c_imx_bus_busy(0);
++			stopped = 1;
++		} else if (i == (msgs->len - 2)) {
++			temp = readb(base + IMX_I2C_I2CR);
++			temp |= I2CR_TXAK;
++			writeb(temp, base + IMX_I2C_I2CR);
++		}
++		msgs->buf[i] = readb(base + IMX_I2C_I2DR);
++	}
++	return 0;
++}
++
++int pm_i2c_imx_xfer(struct i2c_msg *msgs, int num)
++{
++	unsigned int i, temp;
++	int result;
++
++	/* Start I2C transfer */
++	result = pm_i2c_imx_start();
++	if (result)
++		goto fail0;
++
++	/* read/write data */
++	for (i = 0; i < num; i++) {
++		if (i) {
++			temp = readb(base + IMX_I2C_I2CR);
++			temp |= I2CR_RSTA;
++			writeb(temp, base + IMX_I2C_I2CR);
++			result =  pm_i2c_imx_bus_busy(1);
++			if (result)
++				goto fail0;
++		}
++		/* write/read data */
++		if (msgs[i].flags & I2C_M_RD)
++			result = pm_i2c_imx_read(&msgs[i]);
++		else
++			result = pm_i2c_imx_write(&msgs[i]);
++		if (result)
++			goto fail0;
++	}
++
++fail0:
++	/* Stop I2C transfer */
++	pm_i2c_imx_stop();
++
++	return (result < 0) ? result : num;
++}
++
++void pm_i2c_init(u32 base_addr)
++{
++	base = ioremap(base_addr, SZ_4K);
++}
++
++void pm_i2c_deinit(void)
++{
++	iounmap(base);
++}
+diff --git a/arch/arm/mach-mx5/pmic.h b/arch/arm/mach-mx5/pmic.h
+index ab2c9e3..fd347f1 100644
+--- a/arch/arm/mach-mx5/pmic.h
++++ b/arch/arm/mach-mx5/pmic.h
+@@ -21,5 +21,8 @@
+ 
+ extern int __init mx53_loco_init_da9052(void);
+ extern int __init mx53_loco_init_mc34708(void);
++extern int da9053_suspend_cmd_sw(void);
++extern int da9053_suspend_cmd_hw(void);
++extern int da9053_restore_volt_settings(void);
+ 
+ #endif
+-- 
+1.5.4.4
+

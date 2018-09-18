@@ -1,0 +1,45 @@
+From 2910d32b8c614e90abe50462e5ba6983779d884e Mon Sep 17 00:00:00 2001
+From: Anton Vorontsov <avorontsov@mvista.com>
+Date: Fri, 25 Jun 2010 16:20:53 +0400
+Subject: [PATCH] ahci_platform: Remove unneeded ahci_driver.probe assignment
+
+The driver is using platform_driver_probe() during initialization,
+so ahci_driver.probe hook is never used.
+
+But it causes the following (harmless, luckily) section mismatch:
+
+  WARNING: vmlinux.o(.data+0x2fb20): Section mismatch in reference
+  from the variable ahci_driver to the function .init.text:ahci_probe()
+
+This patch removes the ahci_driver.probe assignment, thus fixes
+the warning.
+
+p.s. Note that there's another patch[1] from Rene Bolldorf that
+tried to solve the same issue by __refdata annotation. __refdata
+says that this reference is actually OK, but in fact it is not OK,
+because dereferencing .probe() will cause problems. So the proper
+fix is to remove the assignment.
+
+[1] http://kerneltrap.org/mailarchive/linux-kernel/2010/3/18/4549547
+
+Signed-off-by: Anton Vorontsov <avorontsov@mvista.com>
+Signed-off-by: Jeff Garzik <jgarzik@redhat.com>
+---
+ drivers/ata/ahci_platform.c |    1 -
+ 1 files changed, 0 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/ata/ahci_platform.c b/drivers/ata/ahci_platform.c
+index 5e11b16..8070615 100644
+--- a/drivers/ata/ahci_platform.c
++++ b/drivers/ata/ahci_platform.c
+@@ -166,7 +166,6 @@ static int __devexit ahci_remove(struct platform_device *pdev)
+ }
+ 
+ static struct platform_driver ahci_driver = {
+-	.probe = ahci_probe,
+ 	.remove = __devexit_p(ahci_remove),
+ 	.driver = {
+ 		.name = "ahci",
+-- 
+1.5.4.4
+

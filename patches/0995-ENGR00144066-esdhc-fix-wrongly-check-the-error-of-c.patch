@@ -1,0 +1,28 @@
+From f7befe8ff101ed2f329bd3a3cf7fce4c594f6024 Mon Sep 17 00:00:00 2001
+From: Dong Aisheng <b29396@freescale.com>
+Date: Thu, 26 May 2011 11:45:31 +0800
+Subject: [PATCH] ENGR00144066 esdhc: fix wrongly check the error of clk_get
+
+Should use IS_ERR micro to check the return error.
+
+Signed-off-by: Dong Aisheng <b29396@freescale.com>
+---
+ drivers/mmc/host/mx_sdhci.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/mmc/host/mx_sdhci.c b/drivers/mmc/host/mx_sdhci.c
+index 579bef4..d713d67 100644
+--- a/drivers/mmc/host/mx_sdhci.c
++++ b/drivers/mmc/host/mx_sdhci.c
+@@ -1940,7 +1940,7 @@ static int __devinit sdhci_probe_slot(struct platform_device
+ 
+ 	/* Get the SDHC clock from clock system APIs */
+ 	host->clk = clk_get(&pdev->dev, mmc_plat->clock_mmc);
+-	if (NULL == host->clk) {
++	if (IS_ERR(host->clk)) {
+ 		printk(KERN_ERR "MXC MMC can't get clock.\n");
+ 		goto out1;
+ 	}
+-- 
+1.5.4.4
+

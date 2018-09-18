@@ -1,0 +1,36 @@
+From 75710eaff756f1025dafd5827ed0b836d1e68a18 Mon Sep 17 00:00:00 2001
+From: Jason Chen <b02280@freescale.com>
+Date: Mon, 25 Jul 2011 13:25:23 +0800
+Subject: [PATCH] ENGR00153578 tve-vga: set vga output gain to improve quality
+
+set vga output gain to improve quality.
+
+Signed-off-by: Jason Chen <b02280@freescale.com>
+---
+ drivers/video/mxc/tve.c |    6 +++---
+ 1 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/video/mxc/tve.c b/drivers/video/mxc/tve.c
+index e57eb88..701494a 100644
+--- a/drivers/video/mxc/tve.c
++++ b/drivers/video/mxc/tve.c
+@@ -475,13 +475,13 @@ static int tve_setup_vga(void)
+ 	if (tve.revision == 2) {
+ 		/* set gain */
+ 		reg = __raw_readl(tve.base + tve_regs->tve_tvdac_cont_reg);
+-		reg = (reg & ~TVEV2_DAC_GAIN_MASK) | 0;
++		reg = (reg & ~TVEV2_DAC_GAIN_MASK) | 0xa;
+ 		__raw_writel(reg, tve.base + tve_regs->tve_tvdac_cont_reg);
+ 		reg = __raw_readl(tve.base + tve_regs->tve_tvdac_cont_reg + 4);
+-		reg = (reg & ~TVEV2_DAC_GAIN_MASK) | 0;
++		reg = (reg & ~TVEV2_DAC_GAIN_MASK) | 0xa;
+ 		__raw_writel(reg, tve.base + tve_regs->tve_tvdac_cont_reg + 4);
+ 		reg = __raw_readl(tve.base + tve_regs->tve_tvdac_cont_reg + 8);
+-		reg = (reg & ~TVEV2_DAC_GAIN_MASK) | 0;
++		reg = (reg & ~TVEV2_DAC_GAIN_MASK) | 0xa;
+ 		__raw_writel(reg, tve.base + tve_regs->tve_tvdac_cont_reg + 8);
+ 
+ 		/* set tve_com_conf_reg  */
+-- 
+1.5.4.4
+

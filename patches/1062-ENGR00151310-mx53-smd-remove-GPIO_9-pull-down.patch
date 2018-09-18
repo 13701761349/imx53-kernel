@@ -1,0 +1,42 @@
+From 477c3fcd2b151a36720d6efec3808a642f8bebf5 Mon Sep 17 00:00:00 2001
+From: Lily Zhang <r58066@freescale.com>
+Date: Thu, 21 Jul 2011 19:08:29 +0800
+Subject: [PATCH] ENGR00151310 mx53 smd: remove GPIO_9 pull down
+
+This patch is used to remove the workaround "pull down
+GPIO_9" to support reboot in mx53 SMD. Another workaround
+is adopted into U-Boot to force warm reset as cold reset.
+New workaround can support watchdog timeout in mx53 SMD
+board.
+
+Signed-off-by: Lily Zhang <r58066@freescale.com>
+---
+ arch/arm/plat-mxc/system.c |   12 ++----------
+ 1 files changed, 2 insertions(+), 10 deletions(-)
+
+diff --git a/arch/arm/plat-mxc/system.c b/arch/arm/plat-mxc/system.c
+index 253429b..e4665a2 100644
+--- a/arch/arm/plat-mxc/system.c
++++ b/arch/arm/plat-mxc/system.c
+@@ -77,16 +77,8 @@ void arch_reset(char mode, const char *cmd)
+ 		wcr_enable = (1 << 2);
+ 	}
+ 
+-	if (machine_is_mx53_smd()) {
+-		/* workaround for smd reset func */
+-		gpio_request(MX53_WDA_GPIO, "wdog-rst");
+-		gpio_direction_output(MX53_WDA_GPIO, 0);
+-		gpio_set_value(MX53_WDA_GPIO, 0);
+-	} else {
+-		/* Assert SRS signal */
+-		__raw_writew(wcr_enable, wdog_base);
+-	}
+-
++	/* Assert SRS signal */
++	__raw_writew(wcr_enable, wdog_base);
+ 
+ 	/* wait for reset to assert... */
+ 	mdelay(500);
+-- 
+1.5.4.4
+

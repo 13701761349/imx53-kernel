@@ -1,0 +1,35 @@
+From e31d0edaa15c3102345318e1b3fbe281c3a66e32 Mon Sep 17 00:00:00 2001
+From: Dong Aisheng <b29396@freescale.com>
+Date: Mon, 30 May 2011 16:25:24 +0800
+Subject: [PATCH] ENGR00144146 asrc: add help info in Kconfig for compiling as module
+
+The ASOC platform driver(built in kernel) calls functions
+defined in ASRC, So the kernel may fail to compile when
+config ASRC as module.
+
+The solution is also compiling ASOC platform driver as module.
+It can not be done by memuconfig system automatically
+since ASOC platform does not depends on ASRC driver.
+So we have to add a help info in Kconfig to tell user about
+this limitation.
+
+Signed-off-by: Dong Aisheng <b29396@freescale.com>
+---
+ drivers/mxc/asrc/Kconfig |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/mxc/asrc/Kconfig b/drivers/mxc/asrc/Kconfig
+index 91c6570..0c53307 100644
+--- a/drivers/mxc/asrc/Kconfig
++++ b/drivers/mxc/asrc/Kconfig
+@@ -10,4 +10,7 @@ config MXC_ASRC
+ 	---help---
+          Say Y to get the ASRC service.
+ 
++	 Be noted that if say M here, Please also say CONFIG_SND_MXC_SOC as M
++	 since it uses symbols in this module or the kernel may fail to compile.
++
+ endmenu
+-- 
+1.5.4.4
+

@@ -1,0 +1,29 @@
+From 0469b2257e69527c112755c21c9d6f53f9121721 Mon Sep 17 00:00:00 2001
+From: Zeng Zhaoming <b32542@freescale.com>
+Date: Mon, 8 Aug 2011 02:19:34 +0800
+Subject: [PATCH] ENGR00154433 ASRC: Fix ASRC build error.
+
+Fix asrc build error introduced by:
+'be75f376017a04b55cc9f4b3d1c3f2836deb9e47'
+
+Signed-off-by: Zeng Zhaoming <b32542@freescale.com>
+---
+ drivers/mxc/asrc/mxc_asrc.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/drivers/mxc/asrc/mxc_asrc.c b/drivers/mxc/asrc/mxc_asrc.c
+index ea35fa1..5db4451 100644
+--- a/drivers/mxc/asrc/mxc_asrc.c
++++ b/drivers/mxc/asrc/mxc_asrc.c
+@@ -576,7 +576,7 @@ int asrc_config_pair(struct asrc_config *config)
+ 
+ 	}
+ 
+-	if (cpu_is_mx53) {
++	if (cpu_is_mx53()) {
+ 		/*
+ 		 * for mx53, we need to set input data format
+ 		 * and output data format
+-- 
+1.5.4.4
+

@@ -1,0 +1,28 @@
+From 14855b5829e633293dfe4479794d2d75dde66a14 Mon Sep 17 00:00:00 2001
+From: Sammy He <r62914@freescale.com>
+Date: Tue, 26 Jul 2011 15:56:11 +0800
+Subject: [PATCH] ENGR00153680 vpu: Fix the issue of not increasing open_count
+
+Fix the issue of missing to increase open_count when vpu_open.
+This is due to the patch of removing mx32 and mx37 code.
+
+Signed-off-by: Sammy He <r62914@freescale.com>
+---
+ drivers/mxc/vpu/mxc_vpu.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/mxc/vpu/mxc_vpu.c b/drivers/mxc/vpu/mxc_vpu.c
+index 5ff4ad0..7df033b 100644
+--- a/drivers/mxc/vpu/mxc_vpu.c
++++ b/drivers/mxc/vpu/mxc_vpu.c
+@@ -234,6 +234,7 @@ static irqreturn_t vpu_irq_handler(int irq, void *dev_id)
+ static int vpu_open(struct inode *inode, struct file *filp)
+ {
+ 	spin_lock(&vpu_lock);
++	open_count++;
+ 	filp->private_data = (void *)(&vpu_data);
+ 	spin_unlock(&vpu_lock);
+ 	return 0;
+-- 
+1.5.4.4
+

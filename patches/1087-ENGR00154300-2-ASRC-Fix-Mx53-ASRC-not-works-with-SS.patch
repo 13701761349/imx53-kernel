@@ -1,0 +1,196 @@
+From be75f376017a04b55cc9f4b3d1c3f2836deb9e47 Mon Sep 17 00:00:00 2001
+From: Zeng Zhaoming <b32542@freescale.com>
+Date: Thu, 4 Aug 2011 03:20:22 +0800
+Subject: [PATCH] ENGR00154300-2 ASRC: Fix Mx53 ASRC not works with SSI
+
+Asrc not works with ssi, it partly caused by ASRC driver not correctly
+handle ssi input clock and data format.
+
+SSI frame clock counting by word, when data format is 16bit-LE,
+two channel data combine to one word, and frame rate used by
+ASRC should take this into account.
+
+And more, unlike Mx3x, Mx5x should set input and output data format
+correctly in its ASRMCR1x register.
+
+Signed-off-by: Zeng Zhaoming <b32542@freescale.com>
+---
+ drivers/mxc/asrc/mxc_asrc.c         |   34 ++++++++++++++++++++++++++++-
+ include/linux/mxc_asrc.h            |   13 ++++++++++-
+ sound/soc/imx/imx-3stack-sgtl5000.c |   41 +++++++++++++++++++++++++++++++++-
+ sound/soc/imx/imx-pcm.c             |    8 +++---
+ 4 files changed, 88 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/mxc/asrc/mxc_asrc.c b/drivers/mxc/asrc/mxc_asrc.c
+index 932e7bb..ea35fa1 100644
+--- a/drivers/mxc/asrc/mxc_asrc.c
++++ b/drivers/mxc/asrc/mxc_asrc.c
+@@ -576,14 +576,46 @@ int asrc_config_pair(struct asrc_config *config)
+ 
+ 	}
+ 
++	if (cpu_is_mx53) {
++		/*
++		 * for mx53, we need to set input data format
++		 * and output data format
++		 */
++		if (config->word_width == 16)
++			reg = 0x1 << 9;
++		else if (config->word_width == 8)
++			reg = 0x2 << 9;
++
++		if ((config->outclk & 0x0f) != OUTCLK_ASRCK1_CLK)
++			reg |= 0x1;
++
++		__raw_writel(reg, asrc_vrt_base_addr +
++				ASRC_ASRMCR1A_REG + config->pair * 4);
++	}
++
+ 	/* check whether ideal ratio is a must */
+ 	if ((config->inclk & 0x0f) == INCLK_NONE) {
++		int input_rate = config->input_sample_rate;
++
+ 		reg = __raw_readl(asrc_vrt_base_addr + ASRC_ASRCTR_REG);
+ 		reg &= ~(1 << (20 + config->pair));
+ 		reg |= (0x03 << (13 + (config->pair << 1)));
+ 		__raw_writel(reg, asrc_vrt_base_addr + ASRC_ASRCTR_REG);
++
++		if (cpu_is_mx53()) {
++			/*
++			 * for mx53, like ssi, data will compact to one word,
++			 * and frame rate is the result of word rate.
++			 * So we need to convert input rate to word rate.
++			 * FIXME: ESAI has same issue?
++			 */
++			if (config->word_width == 16)
++				input_rate >>= 1;
++			else if (config->word_width == 8)
++				input_rate >>= 2;
++		}
+ 		err = asrc_set_clock_ratio(config->pair,
+-					   config->input_sample_rate,
++					   input_rate,
+ 					   config->output_sample_rate);
+ 		if (err < 0)
+ 			return err;
+diff --git a/include/linux/mxc_asrc.h b/include/linux/mxc_asrc.h
+index 326cd20..c5d959d 100644
+--- a/include/linux/mxc_asrc.h
++++ b/include/linux/mxc_asrc.h
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright 2008-2010 Freescale Semiconductor, Inc. All Rights Reserved.
++ * Copyright 2008-2011 Freescale Semiconductor, Inc. All Rights Reserved.
+  */
+ 
+ /*
+@@ -162,6 +162,17 @@ enum asrc_error_status {
+ #define ASRC_ASR76K_REG 	0x98
+ #define ASRC_ASR56K_REG 	0x9C
+ 
++/* mx53 expanded */
++#define ASRC_ASRMCRA_REG	0xA0
++#define ASRC_ASRFSTA_REG	0xA4
++#define ASRC_ASRMCRB_REG	0xA8
++#define ASRC_ASRFSTB_REG	0xAC
++#define ASRC_ASRMCRC_REG	0xB0
++#define ASRC_ASRFSTC_REG	0xB4
++#define ASRC_ASRMCR1A_REG	0xC0
++#define ASRC_ASRMCR1B_REG	0xC4
++#define ASRC_ASRMCR1C_REG	0xC8
++
+ struct dma_block {
+ 	unsigned int index;
+ 	unsigned int length;
+diff --git a/sound/soc/imx/imx-3stack-sgtl5000.c b/sound/soc/imx/imx-3stack-sgtl5000.c
+index 0ba1b90..f9063ab 100644
+--- a/sound/soc/imx/imx-3stack-sgtl5000.c
++++ b/sound/soc/imx/imx-3stack-sgtl5000.c
+@@ -70,6 +70,43 @@ struct imx_3stack_priv {
+ 	struct platform_device *pdev;
+ };
+ 
++#if defined(CONFIG_MXC_ASRC) || defined(CONFIG_MXC_ASRC_MODULE)
++static int get_format_width(struct snd_pcm_hw_params *params)
++{
++	switch (params_format(params)) {
++	case SNDRV_PCM_FORMAT_S8:
++	case SNDRV_PCM_FORMAT_U8:
++		return 8;
++
++	case SNDRV_PCM_FORMAT_U16:
++	case SNDRV_PCM_FORMAT_S16_LE:
++	case SNDRV_PCM_FORMAT_S16_BE:
++		return 16;
++
++	case SNDRV_PCM_FORMAT_S20_3LE:
++	case SNDRV_PCM_FORMAT_S20_3BE:
++	case SNDRV_PCM_FORMAT_S24_3LE:
++	case SNDRV_PCM_FORMAT_S24_3BE:
++	case SNDRV_PCM_FORMAT_S24_BE:
++	case SNDRV_PCM_FORMAT_S24_LE:
++	case SNDRV_PCM_FORMAT_U24_BE:
++	case SNDRV_PCM_FORMAT_U24_LE:
++	case SNDRV_PCM_FORMAT_U24_3BE:
++	case SNDRV_PCM_FORMAT_U24_3LE:
++		return 24;
++
++	case SNDRV_PCM_FORMAT_S32:
++	case SNDRV_PCM_FORMAT_U32:
++		return 32;
++
++	default:
++		return 0;
++	}
++
++	return 0;
++}
++#endif
++
+ static struct imx_3stack_priv card_priv;
+ 
+ static int imx_3stack_audio_hw_params(struct snd_pcm_substream *substream,
+@@ -99,7 +136,7 @@ static int imx_3stack_audio_hw_params(struct snd_pcm_substream *substream,
+ 		unsigned int channel = params_channels(params);
+ 		struct mxc_runtime_data *pcm_data =
+ 		    substream->runtime->private_data;
+-		struct asrc_config config;
++		struct asrc_config config = {0};
+ 		struct mxc_audio_platform_data *plat;
+ 		struct imx_3stack_priv *priv = &card_priv;
+ 		int retVal = 0;
+@@ -113,7 +150,7 @@ static int imx_3stack_audio_hw_params(struct snd_pcm_substream *substream,
+ 		config.input_sample_rate = asrc_input_rate;
+ 		config.output_sample_rate = asrc_ssi_data.output_sample_rate;
+ 		config.inclk = INCLK_NONE;
+-		config.word_width = 32;
++		config.word_width = get_format_width(params);
+ 		plat = priv->pdev->dev.platform_data;
+ 		if (plat->src_port == 1)
+ 			config.outclk = OUTCLK_SSI1_TX;
+diff --git a/sound/soc/imx/imx-pcm.c b/sound/soc/imx/imx-pcm.c
+index 3937155..e512271 100644
+--- a/sound/soc/imx/imx-pcm.c
++++ b/sound/soc/imx/imx-pcm.c
+@@ -382,14 +382,14 @@ static int imx_pcm_prepare(struct snd_pcm_substream *substream)
+ 				       1, MXC_DMA_MODE_WRITE);
+ 			prtd->dma_asrc = channel;
+ 			if (prtd->asrc_index == 0)
+-				prtd->dma_ch = MXC_DMA_ASRC_A_RX;
++				channel = MXC_DMA_ASRC_A_RX;
+ 			else if (prtd->asrc_index == 1)
+-				prtd->dma_ch = MXC_DMA_ASRC_B_RX;
++				channel = MXC_DMA_ASRC_B_RX;
+ 			else
+-				prtd->dma_ch = MXC_DMA_ASRC_C_RX;
++				channel = MXC_DMA_ASRC_C_RX;
+ 
+ 			channel =
+-			    mxc_dma_request(MXC_DMA_ASRC_A_RX, "ALSA ASRC RX");
++			    mxc_dma_request(channel, "ALSA ASRC RX");
+ 		} else
+ 			channel = mxc_dma_request(prtd->dma_ch, "ALSA TX SDMA");
+ #else
+-- 
+1.5.4.4
+

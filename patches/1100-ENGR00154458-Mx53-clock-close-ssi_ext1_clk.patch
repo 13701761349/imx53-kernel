@@ -1,0 +1,32 @@
+From b2753658e944b296a820525ac595dfd21b394c84 Mon Sep 17 00:00:00 2001
+From: Yuxi Sun <b36102@freescale.com>
+Date: Fri, 19 Aug 2011 14:51:17 +0800
+Subject: [PATCH] ENGR00154458 Mx53 clock: close ssi_ext1_clk
+
+Set this clock closed by default, and open it when it is needed.
+
+Signed-off-by: Yuxi Sun <b36102@freescale.com>
+---
+ arch/arm/mach-mx5/mx53_smd.c |    6 ++++++
+ 1 files changed, 6 insertions(+), 0 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx53_smd.c b/arch/arm/mach-mx5/mx53_smd.c
+index 4d7d326..97ec0fb 100644
+--- a/arch/arm/mach-mx5/mx53_smd.c
++++ b/arch/arm/mach-mx5/mx53_smd.c
+@@ -1235,6 +1235,12 @@ static void __init mxc_board_init(void)
+ 	mxc_ipu_data.di_clk[0] = clk_get(NULL, "ipu_di0_clk");
+ 	mxc_ipu_data.di_clk[1] = clk_get(NULL, "ipu_di1_clk");
+ 	mxc_ipu_data.csi_clk[0] = clk_get(NULL, "ssi_ext1_clk");
++	/*
++	 *ssi_ext1_clk was enbled in arch/arm/mach-mx5/clock.c, and it was kept
++	 *open to provide clock for audio codec on i.Mx53 Quickstart, but MX53
++	 *SMD board have no needs to do that, so we close it here
++	 */
++	clk_disable(mxc_ipu_data.csi_clk[0]);
+ 	mxc_spdif_data.spdif_core_clk = clk_get(NULL, "spdif_xtal_clk");
+ 	clk_put(mxc_spdif_data.spdif_core_clk);
+ 
+-- 
+1.5.4.4
+

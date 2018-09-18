@@ -1,0 +1,527 @@
+From b19c29bcbb74fabec866696105f3ef18a2e0ef50 Mon Sep 17 00:00:00 2001
+From: Wayne Zou <b36644@freescale.com>
+Date: Wed, 31 Aug 2011 15:28:34 +0800
+Subject: [PATCH] ENGR00155638 mx53 power: Add DDR float pin operation when system idle
+
+1. Add DDR self-refresh mode and float pin operation when system idle
+	For audio playback use case on android r10.3, it can save 10mA@1.54V
+	about 15mW on DDRIO+ memory power, and 6.6mA@2.5V -16.5mW on VDD_REG
+	It can reduce more memory power consumption if cpu idle time is longer
+
+2. remove the L1/L2 cache operation during suspend for mx53
+	The L1/L2 cache are powered by VDDA/VDDAL1 and they should be supplied
+	according to iMX53 datasheet, there is also no EMPG on MX53,
+	so it can be removed to improve system performance and power.
+
+3. remap the suspend_iram_base as MT_MEMORY_NONCACHED instead of MT_HIGH_VECTORS
+	If the IRAM page is marked as Cacheable, the ARM cache controller will
+	attempt to flush dirty cache lines to DDR, so it can fill those lines with
+	IRAM instruction code. The problem is that the DDR is in self-refresh mode
+	and HighZ DDR IO PADs during system idle or suspend, so any DDR access
+	causes the ARM MPU subsystem to hang.
+	It needs to cherry-pick two patches(5a4aeb9f6,7c8d972d8) from community.
+
+4. Add DDR self-refresh mode and float pin operation for mx53 ARD board,
+	and mx53 QS/Ripley board
+	This patch can resovle ramdom suspend/resume issue, since the early code
+	didn't consider the TLB missing case during suspend. It needs to save all
+	the M4IF/IO MUX registers firstly to make sure the page table entried into
+	TLB, and then enter DDR self-refresh mode.
+
+Signed-off-by: Wayne Zou <b36644@freescale.com>
+---
+ arch/arm/mach-mx5/pm.c      |   21 ++--
+ arch/arm/mach-mx5/suspend.S |  285 ++++++++++++++++++++++++++-----------------
+ arch/arm/mach-mx5/system.c  |   18 ++-
+ 3 files changed, 196 insertions(+), 128 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/pm.c b/arch/arm/mach-mx5/pm.c
+index 54bb321..1162990 100644
+--- a/arch/arm/mach-mx5/pm.c
++++ b/arch/arm/mach-mx5/pm.c
+@@ -65,6 +65,8 @@ extern int iram_ready;
+ void *suspend_iram_base;
+ void (*suspend_in_iram)(void *param1, void *param2, void* param3) = NULL;
+ void __iomem *suspend_param1;
++void *mx53_iram_base;
++void (*mx53_wait_in_ram)(void) = NULL;
+ 
+ static int mx5_suspend_enter(suspend_state_t state)
+ {
+@@ -87,8 +89,10 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 		return -EAGAIN;
+ 
+ 	if (state == PM_SUSPEND_MEM) {
+-		local_flush_tlb_all();
+-		flush_cache_all();
++		if (!cpu_is_mx53()) {
++			local_flush_tlb_all();
++			flush_cache_all();
++		}
+ 
+ 		if (pm_data && pm_data->suspend_enter)
+ 			pm_data->suspend_enter();
+@@ -96,9 +100,11 @@ static int mx5_suspend_enter(suspend_state_t state)
+ 			/* Run the suspend code from iRAM. */
+ 			suspend_in_iram(suspend_param1, NULL, NULL);
+ 
+-			/*clear the EMPGC0/1 bits */
+-			__raw_writel(0, MXC_SRPG_EMPGC0_SRPGCR);
+-			__raw_writel(0, MXC_SRPG_EMPGC1_SRPGCR);
++			if (!cpu_is_mx53()) {
++				/*clear the EMPGC0/1 bits */
++				__raw_writel(0, MXC_SRPG_EMPGC0_SRPGCR);
++				__raw_writel(0, MXC_SRPG_EMPGC1_SRPGCR);
++			}
+ 		} else {
+ 			if (cpu_is_mx50()) {
+ 				/* Store the LPM mode of databanhn */
+@@ -239,14 +245,11 @@ static int __init pm_init(void)
+ 	/* Need to remap the area here since we want the memory region
+ 		 to be executable. */
+ 	suspend_iram_base = __arm_ioremap(iram_paddr, SZ_4K,
+-					  MT_HIGH_VECTORS);
++					  MT_MEMORY_NONCACHED);
+ 
+ 	if (cpu_is_mx51() || cpu_is_mx53()) {
+ 		suspend_param1 =
+ 			cpu_is_mx51() ? (void *)SUSPEND_ID_MX51:(void *)SUSPEND_ID_MX53;
+-		/* for mx53 ARD, doesn't operate DDR in suspend */
+-		if (machine_is_mx53_ard() || board_is_mx53_loco_mc34708())
+-			suspend_param1 = (void *)SUSPEND_ID_NONE;
+ 		memcpy(suspend_iram_base, cpu_do_suspend_workaround,
+ 				SZ_4K);
+ 	} else if (cpu_is_mx50()) {
+diff --git a/arch/arm/mach-mx5/suspend.S b/arch/arm/mach-mx5/suspend.S
+index 8cec844..105fac4 100644
+--- a/arch/arm/mach-mx5/suspend.S
++++ b/arch/arm/mach-mx5/suspend.S
+@@ -18,25 +18,21 @@
+ #define ARM_CTRL_ICACHE  1 << 12
+ #define ARM_AUXCR_L2EN   1 << 1
+ 
+-.macro PM_SET_BACKUP_REG, addr, bitmask, val, num
+-	mov	r0, #(\addr & 0x000000FF)
+-	orr	r0, r0, #(\addr & 0x0000FF00)
+-	orr	r0, r0, #(\addr & 0x00FF0000)
+-	orr	r0, r0, #(\addr & 0xFF000000)
+-	ldr	r1, [r0]
+-	str r1, __mx5x_temp_stack + \num * 4
+-	bic r1, r1, #(\bitmask)
+-	orr r1, r1, #(\val)
+-	str r1, [r0]
++.macro PM_SET_BACKUP_REG, addr, num
++	ldr r2, =\addr
++	ldr r2, [r1, r2]
++	str r2, [r3, #(\num * 4)]
++.endm
++
++.macro PM_SET_HIGHZ_PAD, addr
++	ldr r2, =\addr
++	str r4, [r1, r2]
+ .endm
+ 
+ .macro PM_SET_RESTORE_REG, addr, num
+-	mov	r0, #(\addr & 0x000000FF)
+-	orr	r0, r0, #(\addr & 0x0000FF00)
+-	orr	r0, r0, #(\addr & 0x00FF0000)
+-	orr	r0, r0, #(\addr & 0xFF000000)
+-	ldr r1, __mx5x_temp_stack + \num * 4
+-	str r1, [r0]
++    ldr     r4, [r3, #(\num * 4)]
++    ldr     r2, =\addr
++    str     r4, [r1, r2]
+ .endm
+ 
+ .macro PM_SET_ADDR_REG, addr, reg
+@@ -46,36 +42,41 @@
+ 	orr	\reg, \reg, #(\addr & 0xFF000000)
+ .endm
+ 
+-#define MX51_DRAM_SDCLK_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA84B8)
+-#define MX53_DRAM_SDCLK0_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8578)
+-#define MX53_DRAM_SDCLK1_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8570)
+-#define MX53_DRAM_DQM3_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8554)
+-#define MX53_DRAM_SDQS3_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8558)
+-#define MX53_DRAM_SDCKE1_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA855C)
+-#define MX53_DRAM_DQM2_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8560)
+-#define MX53_DRAM_DODT1_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8564)
+-#define MX53_DRAM_SDQS2_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8568)
+-#define MX53_DRAM_RESET_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA856c)
+-#define MX53_DRAM_CAS_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8574)
+-#define MX53_DRAM_SDQS0_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA857C)
+-#define MX53_DRAM_DODT0_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8580)
+-#define MX53_DRAM_DQM0_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8584)
+-#define MX53_DRAM_RAS_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8588)
+-#define MX53_DRAM_SDQS1_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8590)
+-#define MX53_DRAM_DQM1_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8594)
+-
+-#define MX53_DRAM_GRP_ADDDS_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA86f0)
+-#define MX53_DRAM_GRP_B0DS_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8718)
+-#define MX53_DRAM_GRP_B1DS_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA871C)
+-#define MX53_DRAM_GRP_CTLDS_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8720)
+-#define MX53_DRAM_GRP_B2DS_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA8728)
+-#define MX53_DRAM_GRP_B3DS_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA872C)
+-
+-#define MX53_M4IF_CR0_FDVFS_ADDR AIPS2_IO_ADDRESS(0x83fd808C)
++#define SUSPEND_ID_MX51 1
++#define SUSPEND_ID_MX53 3
++#define SUSPEND_ID_NONE 4
+ 
++#define MX51_DRAM_SDCLK_PAD_CTRL_ADDR AIPS1_IO_ADDRESS(0x73FA84B8)
+ #define MX51_CCM_BASE AIPS1_IO_ADDRESS(0x73fd4000)
+ #define MX51_PLL1_BASE AIPS2_IO_ADDRESS(0x83f80000)
+ 
++#define M4IF_MCR0_OFFSET			(0x008C)
++#define M4IF_MCR0_FDVFS				(0x1 << 11)
++#define M4IF_MCR0_FDVACK			(0x1 << 27)
++#define IOMUXC_BASE_ADDR_VIRT		AIPS1_IO_ADDRESS(IOMUXC_BASE_ADDR)
++#define M4IF_BASE_ADDR_VIRT			AIPS2_IO_ADDRESS(M4IF_BASE_ADDR)
++
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM3		0x554
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS3	0x558
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM2		0x560
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_SDODT1	0x564
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS2	0x568
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_SDCLK_1	0x570
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_CAS		0x574
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_SDCLK_0	0x578
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS0	0x57c
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_SDODT0	0x580
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM0		0x584
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_RAS		0x588
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS1	0x590
++#define IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM1		0x594
++#define IOMUXC_SW_PAD_CTL_GRP_ADDDS			0x6f0
++#define IOMUXC_SW_PAD_CTL_GRP_B0DS			0x718
++#define IOMUXC_SW_PAD_CTL_GRP_B1DS			0x71c
++#define IOMUXC_SW_PAD_CTL_GRP_CTLDS			0x720
++#define IOMUXC_SW_PAD_CTL_GRP_B2DS			0x728
++#define IOMUXC_SW_PAD_CTL_GRP_B3DS			0x72c
++
+ /*
+  *	cpu_do_suspend_workaround()
+  *
+@@ -87,6 +88,8 @@ ENTRY(cpu_do_suspend_workaround)
+     stmfd   sp!, {r4,r5,r6,r7,r9,r10,r11}     @ Save registers
+ 
+     mov    r6, r0                       @save iomux address
++    cmp     r6, #SUSPEND_ID_MX51
++    bne     mx53_start               @ don't disable cache on imx53
+     /* Disable L1 caches */
+     mrc     p15, 0, r0, c1, c0, 0    @ R0 = system control reg
+     bic     r0, r0, #ARM_CTRL_ICACHE @ Disable ICache
+@@ -137,52 +140,93 @@ FinishedClean:
+     bic     r0, r0, #ARM_AUXCR_L2EN @ Disable L2 cache
+     mcr     p15, 0, r0, c1, c0, 1   @ Update aux control reg
+ 
++mx53_start:
+     /* Do nothing for DDR */
+-    cmp     r6, #4
++    cmp     r6, #SUSPEND_ID_NONE
+     beq     mx5x_wfi
+ 	/*Set the DDR drive strength to low */
+-    cmp     r6, #1
++    cmp     r6, #SUSPEND_ID_MX51
+     bne     mx53_reduce_ddr_drive_strength
+-    PM_SET_BACKUP_REG MX51_DRAM_SDCLK_PAD_CTRL_ADDR, 0x6, 0, 0
++	ldr r0, =MX51_DRAM_SDCLK_PAD_CTRL_ADDR
++	ldr	r1, [r0]
++	str r1, __mx5x_temp_stack
++	bic r1, r1, #0x6
++	str r1, [r0]
+ mx53_reduce_ddr_drive_strength:
+-    cmp     r6, #3
++    cmp     r6, #SUSPEND_ID_MX53
+     bne     mx5x_wfi
+ 
+ mx53_force_ddr_selfrefresh:
+-    PM_SET_ADDR_REG MX53_M4IF_CR0_FDVFS_ADDR, r4
+-    ldr r5, [r4]
+-    orr r5, r5 , #0x800
+-    str r5, [r4]
+-    ldr r7,=0x8000000
+-wait_ddr_refresh:
+-    ldr r5, [r4]
+-    and r5, r5, #0x8000000
+-    cmp r5, r7
+-    bne wait_ddr_refresh
+-
+-    PM_SET_BACKUP_REG MX53_DRAM_SDCLK0_PAD_CTRL_ADDR, 0x380000, 0x0, 0
+-    PM_SET_BACKUP_REG MX53_DRAM_SDCLK1_PAD_CTRL_ADDR, 0x380000, 0x0, 1
+-    PM_SET_BACKUP_REG MX53_DRAM_DQM3_PAD_CTRL_ADDR , 0x380000, 0x0, 2
+-    PM_SET_BACKUP_REG MX53_DRAM_SDQS3_PAD_CTRL_ADDR, 0x380000, 0x0, 3
+-    /*PM_SET_BACKUP_REG MX53_DRAM_SDCKE1_PAD_CTRL_ADDR, 0x380000, 0x80000, 4*/
+-    PM_SET_BACKUP_REG MX53_DRAM_DQM2_PAD_CTRL_ADDR , 0x380000, 0x0, 5
+-    PM_SET_BACKUP_REG MX53_DRAM_DODT1_PAD_CTRL_ADDR, 0x380000, 0x0, 6
+-    PM_SET_BACKUP_REG MX53_DRAM_SDQS2_PAD_CTRL_ADDR, 0x380000, 0x0, 7
+-    /*PM_SET_BACKUP_REG MX53_DRAM_RESET_PAD_CTRL_ADDR, 0x380000, 0x80000, 8 */
+-    PM_SET_BACKUP_REG MX53_DRAM_CAS_PAD_CTRL_ADDR  , 0x380000, 0x0, 9
+-    PM_SET_BACKUP_REG MX53_DRAM_SDQS0_PAD_CTRL_ADDR, 0x380000, 0x0, 10
+-    PM_SET_BACKUP_REG MX53_DRAM_DODT0_PAD_CTRL_ADDR, 0x380000, 0x0, 11
+-    PM_SET_BACKUP_REG MX53_DRAM_DQM0_PAD_CTRL_ADDR , 0x380000, 0x0, 12
+-    PM_SET_BACKUP_REG MX53_DRAM_RAS_PAD_CTRL_ADDR  , 0x380000, 0x0, 13
+-    PM_SET_BACKUP_REG MX53_DRAM_SDQS1_PAD_CTRL_ADDR, 0x380000, 0x0, 14
+-    PM_SET_BACKUP_REG MX53_DRAM_DQM1_PAD_CTRL_ADDR , 0x380000, 0x0, 15
+-
+-    PM_SET_BACKUP_REG MX53_DRAM_GRP_ADDDS_PAD_CTRL_ADDR, 0x380000, 0x0, 16
+-    PM_SET_BACKUP_REG MX53_DRAM_GRP_B0DS_PAD_CTRL_ADDR, 0x380000, 0x0, 17
+-    PM_SET_BACKUP_REG MX53_DRAM_GRP_B1DS_PAD_CTRL_ADDR, 0x380000, 0x0, 18
+-    PM_SET_BACKUP_REG MX53_DRAM_GRP_CTLDS_PAD_CTRL_ADDR, 0x380000, 0x0, 19
+-    PM_SET_BACKUP_REG MX53_DRAM_GRP_B2DS_PAD_CTRL_ADDR, 0x380000, 0x0, 20
+-    PM_SET_BACKUP_REG MX53_DRAM_GRP_B3DS_PAD_CTRL_ADDR, 0x380000, 0x0, 21
++    /* Point R0 at M4IF register set */
++    ldr     r0, =M4IF_BASE_ADDR_VIRT
++
++    /* Point R1 at IOMUX register set */
++    ldr     r1, =IOMUXC_BASE_ADDR_VIRT
++
++    /* Point R3 at temporary IRAM storage for DDR pad config */
++    adr     r3, __mx5x_temp_stack
++
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM3,		0
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS3, 	1
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM2,		2
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDODT1,	3
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS2, 	4
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDCLK_1,	5
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_CAS,		6
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDCLK_0,	7
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS0,		8
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDODT0,	9
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM0,		10
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_RAS,		11
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS1, 	12
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM1,		13
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_GRP_ADDDS,			14
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_GRP_B0DS,			15
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_GRP_B1DS, 			16
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_GRP_CTLDS,			17
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_GRP_B2DS, 			18
++	PM_SET_BACKUP_REG IOMUXC_SW_PAD_CTL_GRP_B3DS, 			19
++
++    /* Set FDVFS bit of M4IF_MCR0 to request DDR to enter self-refresh */
++    ldr     r2,[r0, #M4IF_MCR0_OFFSET]
++    orr     r2, r2, #M4IF_MCR0_FDVFS
++    str     r2,[r0, #M4IF_MCR0_OFFSET]
++
++    /* Poll FDVACK bit of M4IF_MCR to wait for DDR to enter self-refresh */
++WAIT_SR_ACK:
++    ldr     r2,[r0, #M4IF_MCR0_OFFSET]
++    ands    r2, r2, #M4IF_MCR0_FDVACK
++    beq     WAIT_SR_ACK
++
++    /*
++     * Set DSE of all DDR I/O pads to 0 => HighZ
++     * except CKE which must drive during self-refresh
++     * according to JEDEC
++	 */
++
++    ldr     r4, =0
++	PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM3
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS3
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM2
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_SDODT1
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS2
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_SDCLK_1
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_CAS
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_SDCLK_0
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS0
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_SDODT0
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM0
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_RAS
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS1
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM1
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_GRP_ADDDS
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_GRP_B0DS
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_GRP_B1DS
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_GRP_B2DS
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_GRP_B3DS
++	/* use DSE=1 for CKE pin,when DDR is in self-refresh */
++    ldr     r4, =1
++    PM_SET_HIGHZ_PAD IOMUXC_SW_PAD_CTL_GRP_CTLDS
+ mx5x_wfi:
+     /*
+      * PLL1 workaround as the following: For mx51 only.
+@@ -198,7 +242,7 @@ mx5x_wfi:
+      *      (7) Wait MFN change complete by delay 4.6us,
+      *      (8) Switch DDR and ARM back to PLL1
+      */
+-	cmp r6, #1
++	cmp r6, #SUSPEND_ID_MX51
+ 
+ 	bne WFI
+ 	PM_SET_ADDR_REG MX51_PLL1_BASE, r3
+@@ -250,7 +294,7 @@ WFI:
+ 	mov r0,#0x0
+ 	.long     0xe320f003              @ Opcode for WFI
+ 
+-	cmp     r6, #1
++	cmp     r6, #SUSPEND_ID_MX51
+ 	bne      wfi_done
+ 
+ 	/* step 5 */
+@@ -292,44 +336,56 @@ WFI:
+ 	bne     3b
+ 
+ wfi_done:
+-    cmp     r6, #4
++    cmp     r6, #SUSPEND_ID_NONE
+     beq     mx5x_post_wfi
+ 
+     /*Set the DDR drive strength to max */
+-    cmp     r6, #1
++    cmp     r6, #SUSPEND_ID_MX51
+     bne     mx53_restore_ddr_drive_strength
+-    PM_SET_RESTORE_REG MX51_DRAM_SDCLK_PAD_CTRL_ADDR, 0
++	ldr r0, =MX51_DRAM_SDCLK_PAD_CTRL_ADDR
++	ldr r1, __mx5x_temp_stack
++	str r1, [r0]
+ mx53_restore_ddr_drive_strength:
+-    cmp     r6, #3
++    cmp     r6, #SUSPEND_ID_MX53
+     bne     mx5x_post_wfi
+-    PM_SET_RESTORE_REG MX53_DRAM_SDCLK0_PAD_CTRL_ADDR, 0
+-    PM_SET_RESTORE_REG MX53_DRAM_SDCLK1_PAD_CTRL_ADDR, 1
+-    PM_SET_RESTORE_REG MX53_DRAM_DQM3_PAD_CTRL_ADDR , 2
+-    PM_SET_RESTORE_REG MX53_DRAM_SDQS3_PAD_CTRL_ADDR, 3
+-    /*PM_SET_RESTORE_REG MX53_DRAM_SDCKE1_PAD_CTRL_ADDR, 4*/
+-    PM_SET_RESTORE_REG MX53_DRAM_DQM2_PAD_CTRL_ADDR , 5
+-    PM_SET_RESTORE_REG MX53_DRAM_DODT1_PAD_CTRL_ADDR, 6
+-    PM_SET_RESTORE_REG MX53_DRAM_SDQS2_PAD_CTRL_ADDR, 7
+-    /*PM_SET_RESTORE_REG MX53_DRAM_RESET_PAD_CTRL_ADDR, 8*/
+-    PM_SET_RESTORE_REG MX53_DRAM_CAS_PAD_CTRL_ADDR  , 9
+-    PM_SET_RESTORE_REG MX53_DRAM_SDQS0_PAD_CTRL_ADDR, 10
+-    PM_SET_RESTORE_REG MX53_DRAM_DODT0_PAD_CTRL_ADDR, 11
+-    PM_SET_RESTORE_REG MX53_DRAM_DQM0_PAD_CTRL_ADDR , 12
+-    PM_SET_RESTORE_REG MX53_DRAM_RAS_PAD_CTRL_ADDR  , 13
+-    PM_SET_RESTORE_REG MX53_DRAM_SDQS1_PAD_CTRL_ADDR, 14
+-    PM_SET_RESTORE_REG MX53_DRAM_DQM1_PAD_CTRL_ADDR , 15
+-
+-    PM_SET_RESTORE_REG MX53_DRAM_GRP_ADDDS_PAD_CTRL_ADDR ,16
+-    PM_SET_RESTORE_REG MX53_DRAM_GRP_B0DS_PAD_CTRL_ADDR ,17
+-    PM_SET_RESTORE_REG MX53_DRAM_GRP_B1DS_PAD_CTRL_ADDR ,18
+-    PM_SET_RESTORE_REG MX53_DRAM_GRP_CTLDS_PAD_CTRL_ADDR ,19
+-    PM_SET_RESTORE_REG MX53_DRAM_GRP_B2DS_PAD_CTRL_ADDR ,20
+-    PM_SET_RESTORE_REG MX53_DRAM_GRP_B3DS_PAD_CTRL_ADDR ,21
+-mx53_disable_ddr_selfrefresh:
+-    PM_SET_ADDR_REG MX53_M4IF_CR0_FDVFS_ADDR, r4
+-    ldr r5, [r4]
+-    bic r5, r5 , #0x800
+-    str r5, [r4]
++
++    ldr     r0, =M4IF_BASE_ADDR_VIRT
++    ldr     r1, =IOMUXC_BASE_ADDR_VIRT
++    adr     r3, __mx5x_temp_stack
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM3,		0
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS3, 	1
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM2,		2
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDODT1,	3
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS2, 	4
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDCLK_1,	5
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_CAS,		6
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDCLK_0,	7
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS0,	8
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDODT0,	9
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM0,		10
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_RAS,		11
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_SDQS1, 	12
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_PAD_DRAM_DQM1,		13
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_GRP_ADDDS,			14
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_GRP_B0DS,			15
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_GRP_B1DS, 			16
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_GRP_CTLDS,			17
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_GRP_B2DS, 			18
++	PM_SET_RESTORE_REG IOMUXC_SW_PAD_CTL_GRP_B3DS, 			19
++
++    /* Clear FDVFS bit of M4IF_MCR0 to request DDR to exit self-refresh */
++    ldr     r2,[r0, #M4IF_MCR0_OFFSET]
++    bic     r2, r2, #M4IF_MCR0_FDVFS
++    str     r2,[r0, #M4IF_MCR0_OFFSET]
++
++    /* Poll FDVACK bit of M4IF_MCR to wait for DDR to exit self-refresh */
++WAIT_AR_ACK:
++    ldr     r2,[r0, #M4IF_MCR0_OFFSET]
++    ands    r2, r2, #M4IF_MCR0_FDVACK
++    bne     WAIT_AR_ACK
++
++    cmp     r6, #SUSPEND_ID_MX51
++    bne     mx53_end
+ mx5x_post_wfi:
+     mov     r0, #0
+     mcr     p15, 0, r0, c7, c5, 0   @ Invalidate inst cache
+@@ -385,6 +441,7 @@ FinishedInvalidate:
+     orr     r0, r0, #ARM_CTRL_DCACHE @ Enable DCache
+     mcr     p15, 0, r0, c1, c0, 0    @ Update system control reg
+ 
++mx53_end:
+     /* Restore registers */
+     ldmfd sp!, {r4,r5,r6,r7,r9,r10,r11}
+     mov		pc, lr
+diff --git a/arch/arm/mach-mx5/system.c b/arch/arm/mach-mx5/system.c
+index 11b29b9..20e6a17 100644
+--- a/arch/arm/mach-mx5/system.c
++++ b/arch/arm/mach-mx5/system.c
+@@ -49,6 +49,8 @@ extern void stop_dvfs(void);
+ extern void *wait_in_iram_base;
+ extern void __iomem *apll_base;
+ extern void __iomem *arm_plat_base;
++extern void (*suspend_in_iram)(void *param1, void *param2, void* param3);
++extern void __iomem *suspend_param1;
+ 
+ static struct clk *gpc_dvfs_clk;
+ static struct clk *pll1_sw_clk;
+@@ -61,7 +63,8 @@ static struct clk *sys_clk ;
+ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
+ {
+ 	u32 plat_lpc, arm_srpgcr, ccm_clpcr;
+-	u32 empgc0, empgc1;
++	u32 empgc0 = 0;
++	u32 empgc1 = 0;
+ 	int stop_mode = 0;
+ 
+ 	/* always allow platform to issue a deep sleep mode request */
+@@ -69,8 +72,10 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
+ 	    ~(MXC_CORTEXA8_PLAT_LPC_DSM);
+ 	ccm_clpcr = __raw_readl(MXC_CCM_CLPCR) & ~(MXC_CCM_CLPCR_LPM_MASK);
+ 	arm_srpgcr = __raw_readl(MXC_SRPG_ARM_SRPGCR) & ~(MXC_SRPGCR_PCR);
+-	empgc0 = __raw_readl(MXC_SRPG_EMPGC0_SRPGCR) & ~(MXC_SRPGCR_PCR);
+-	empgc1 = __raw_readl(MXC_SRPG_EMPGC1_SRPGCR) & ~(MXC_SRPGCR_PCR);
++	if (!cpu_is_mx53()) {
++		empgc0 = __raw_readl(MXC_SRPG_EMPGC0_SRPGCR) & ~(MXC_SRPGCR_PCR);
++		empgc1 = __raw_readl(MXC_SRPG_EMPGC1_SRPGCR) & ~(MXC_SRPGCR_PCR);
++	}
+ 
+ 	switch (mode) {
+ 	case WAIT_CLOCKED:
+@@ -96,7 +101,7 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
+ 		}
+ 
+ 		arm_srpgcr |= MXC_SRPGCR_PCR;
+-		if (stop_mode) {
++		if (stop_mode && !cpu_is_mx53()) {
+ 			empgc0 |= MXC_SRPGCR_PCR;
+ 			empgc1 |= MXC_SRPGCR_PCR;
+ 		}
+@@ -120,7 +125,7 @@ void mxc_cpu_lp_set(enum mxc_cpu_pwr_mode mode)
+ 	/* Enable NEON SRPG for all but MX50TO1.0. */
+ 	if (!(mx50_revision() == IMX_CHIP_REVISION_1_0))
+ 		__raw_writel(arm_srpgcr, MXC_SRPG_NEON_SRPGCR);
+-	if (stop_mode) {
++	if (stop_mode && !cpu_is_mx53()) {
+ 		__raw_writel(empgc0, MXC_SRPG_EMPGC0_SRPGCR);
+ 		__raw_writel(empgc1, MXC_SRPG_EMPGC1_SRPGCR);
+ 	}
+@@ -226,6 +231,9 @@ void arch_idle(void)
+ 			} else
+ 				wait_in_iram(ccm_base, databahn_base,
+ 					clk_get_usecount(sys_clk));
++		} else if (cpu_is_mx53() && (clk_get_usecount(ddr_clk) == 0)
++				&& low_bus_freq_mode) {
++			suspend_in_iram(suspend_param1, NULL, NULL);
+ 		} else
+ 			cpu_do_idle();
+ 		clk_disable(gpc_dvfs_clk);
+-- 
+1.5.4.4
+

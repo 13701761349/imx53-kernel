@@ -1,0 +1,49 @@
+From 531512fc9af762c1d20f652c5da1ccbaa67d4c25 Mon Sep 17 00:00:00 2001
+From: Rusty Russell <rusty@rustcorp.com.au>
+Date: Wed, 11 Aug 2010 23:04:16 -0600
+Subject: [PATCH] param: silence .init.text references from param ops
+
+Ideally, we'd check that it was only the "set" function which was __init,
+and that the permissions were r/o.  But that's a little hard.
+
+Signed-off-by: Rusty Russell <rusty@rustcorp.com.au>
+Acked-by: Sam Ravnborg <sam@ravnborg.org>
+Tested-by: Phil Carmody <ext-phil.2.carmody@nokia.com>
+---
+ scripts/mod/modpost.c |   13 +++++++++++++
+ 1 files changed, 13 insertions(+), 0 deletions(-)
+
+diff --git a/scripts/mod/modpost.c b/scripts/mod/modpost.c
+index f6127b9..efecf92 100644
+--- a/scripts/mod/modpost.c
++++ b/scripts/mod/modpost.c
+@@ -986,6 +986,13 @@ static const struct sectioncheck *section_mismatch(
+  *   fromsec = .data*
+  *   atsym   =__param*
+  *
++ * Pattern 1a:
++ *   module_param_call() ops can refer to __init set function if permissions=0
++ *   The pattern is identified by:
++ *   tosec   = .init.text
++ *   fromsec = .data*
++ *   atsym   = __param_ops_*
++ *
+  * Pattern 2:
+  *   Many drivers utilise a *driver container with references to
+  *   add, remove, probe functions etc.
+@@ -1020,6 +1027,12 @@ static int secref_whitelist(const struct sectioncheck *mismatch,
+ 	    (strncmp(fromsym, "__param", strlen("__param")) == 0))
+ 		return 0;
+ 
++	/* Check for pattern 1a */
++	if (strcmp(tosec, ".init.text") == 0 &&
++	    match(fromsec, data_sections) &&
++	    (strncmp(fromsym, "__param_ops_", strlen("__param_ops_")) == 0))
++		return 0;
++
+ 	/* Check for pattern 2 */
+ 	if (match(tosec, init_exit_sections) &&
+ 	    match(fromsec, data_sections) &&
+-- 
+1.5.4.4
+

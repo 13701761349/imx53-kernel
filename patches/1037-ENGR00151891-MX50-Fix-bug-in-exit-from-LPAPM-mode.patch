@@ -1,0 +1,37 @@
+From 3e340165172abdafaeab229de2d445b90b189674 Mon Sep 17 00:00:00 2001
+From: Ranjani Vaidyanathan <ra5478@freescale.com>
+Date: Tue, 21 Jun 2011 12:54:09 -0500
+Subject: [PATCH] ENGR00151891: MX50-Fix bug in exit from LPAPM mode.
+
+When exiting from LPAPM mode, ARM clock is run at 266.67MHZ for
+a few instructions while the voltage is still at 0.85V.
+Fix this issue by setting the ARM-PODF divider before
+switching the parent.
+
+Signed-off-by: Ranjani Vaidyanathan <ra5478@freescale.com>
+---
+ arch/arm/mach-mx5/bus_freq.c |    7 +++++--
+ 1 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/bus_freq.c b/arch/arm/mach-mx5/bus_freq.c
+index a4cd0d9..03caf7b 100644
+--- a/arch/arm/mach-mx5/bus_freq.c
++++ b/arch/arm/mach-mx5/bus_freq.c
+@@ -497,9 +497,12 @@ void exit_lpapm_mode_mx50(int high_bus_freq)
+ 		__raw_writel(0x02, MXC_CCM_CACRR);
+ 
+ 		clk_set_rate(pll1, cpu_wp_tbl[0].pll_rate);
+-		clk_set_parent(pll1_sw_clk, pll1);
+-		/* Set the divider to ARM_PODF to 5. */
++
++		/* Set the divider to ARM_PODF to 5 before
++		  * switching the parent.
++		  */
+ 		__raw_writel(0x4, MXC_CCM_CACRR);
++		clk_set_parent(pll1_sw_clk, pll1);
+ 	}
+ 
+ 	if (!completion_done(&voltage_change_cmpl))
+-- 
+1.5.4.4
+

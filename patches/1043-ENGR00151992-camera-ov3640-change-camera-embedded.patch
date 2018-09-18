@@ -1,0 +1,29 @@
+From 0350f09fb28e30f0f57ff696d3f4630781acd62f Mon Sep 17 00:00:00 2001
+From: Yuxi Sun <b36102@freescale.com>
+Date: Thu, 23 Jun 2011 17:20:33 +0800
+Subject: [PATCH] ENGR00151992: camera ov3640: change camera embedded rotate function
+
+change camera rotate functions always return success.
+
+Signed-off-by: Yuxi Sun <b36102@freescale.com>
+---
+ drivers/media/video/mxc/capture/ov3640.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/drivers/media/video/mxc/capture/ov3640.c b/drivers/media/video/mxc/capture/ov3640.c
+index 0613ea2..078d9ba 100644
+--- a/drivers/media/video/mxc/capture/ov3640.c
++++ b/drivers/media/video/mxc/capture/ov3640.c
+@@ -1123,6 +1123,9 @@ static int ioctl_s_ctrl(struct v4l2_int_device *s, struct v4l2_control *vc)
+ 		break;
+ 	case V4L2_CID_VFLIP:
+ 		break;
++	case V4L2_CID_MXC_ROT:
++	case V4L2_CID_MXC_VF_ROT:
++		break;
+ 	default:
+ 		retval = -EPERM;
+ 		break;
+-- 
+1.5.4.4
+

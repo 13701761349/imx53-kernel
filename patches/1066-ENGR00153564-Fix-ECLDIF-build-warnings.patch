@@ -1,0 +1,46 @@
+From 8ae7be18970d476628677a982b9e428a4631effc Mon Sep 17 00:00:00 2001
+From: Danny Nold <dannynold@freescale.com>
+Date: Fri, 22 Jul 2011 11:15:40 -0500
+Subject: [PATCH] ENGR00153564 - Fix ECLDIF build warnings
+
+- Remove unused variable to correct build warning
+- Fix __initdata structure define
+
+Signed-off-by: Danny Nold <dannynold@freescale.com>
+---
+ drivers/video/mxc/mxc_elcdif_fb.c |    5 ++---
+ 1 files changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/video/mxc/mxc_elcdif_fb.c b/drivers/video/mxc/mxc_elcdif_fb.c
+index 4a8d80d..7f3ee87 100644
+--- a/drivers/video/mxc/mxc_elcdif_fb.c
++++ b/drivers/video/mxc/mxc_elcdif_fb.c
+@@ -102,7 +102,7 @@ static bool g_elcdif_axi_clk_enable;
+ static bool g_elcdif_pix_clk_enable;
+ static struct clk *g_elcdif_axi_clk;
+ static struct clk *g_elcdif_pix_clk;
+-static __initdata struct mxcfb_mode mxc_disp_mode;
++static struct mxcfb_mode mxc_disp_mode;
+ 
+ static inline void setup_dotclk_panel(u32 pixel_clk,
+ 				      u16 v_pulse_width,
+@@ -527,7 +527,6 @@ void mxcfb_elcdif_register_mode(const struct fb_videomode *modedb,
+ 	int num_modes, int dev_mode)
+ {
+ 	struct fb_videomode *mode;
+-	int mode_sum;
+ 
+ 	mode = kzalloc(num_modes * sizeof(struct fb_videomode), GFP_KERNEL);
+ 
+@@ -1225,7 +1224,7 @@ static int mxc_elcdif_fb_unmap_video_memory(struct fb_info *fbi)
+ 	return 0;
+ }
+ 
+-static int mxc_elcdif_fb_probe(struct platform_device *pdev)
++static int __devinit mxc_elcdif_fb_probe(struct platform_device *pdev)
+ {
+ 	int ret = 0;
+ 	struct mxc_elcdif_fb_data *data;
+-- 
+1.5.4.4
+

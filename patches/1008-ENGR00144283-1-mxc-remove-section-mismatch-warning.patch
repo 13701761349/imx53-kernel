@@ -1,0 +1,104 @@
+From 1532863120de3dba9fea0368353eb607093240ed Mon Sep 17 00:00:00 2001
+From: Lily Zhang <r58066@freescale.com>
+Date: Wed, 1 Jun 2011 12:32:09 +0800
+Subject: [PATCH] ENGR00144283-1 mxc: remove section mismatch warning message
+
+The following warning message is reported when building mx5 image:
+WARNING: modpost: Found 9 section mismatch(es).
+To see full details build your kernel with:
+'make CONFIG_DEBUG_SECTION_MISMATCH=y'
+
+This patch is used to remove the warning message in mxc arch folders
+
+Signed-off-by: Lily Zhang <r58066@freescale.com>
+---
+ arch/arm/mach-mx5/mx50_arm2.c       |    2 +-
+ arch/arm/mach-mx5/mx50_rdp.c        |    2 +-
+ arch/arm/mach-mx5/mx53_smd_rfkill.c |    7 +++----
+ arch/arm/plat-mxc/cpufreq.c         |    4 ++--
+ 4 files changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm/mach-mx5/mx50_arm2.c b/arch/arm/mach-mx5/mx50_arm2.c
+index 03d498e..6cf06aa 100644
+--- a/arch/arm/mach-mx5/mx50_arm2.c
++++ b/arch/arm/mach-mx5/mx50_arm2.c
+@@ -881,7 +881,7 @@ static struct max17135_platform_data max17135_pdata __initdata = {
+ 	.init = max17135_regulator_init,
+ };
+ 
+-static int max17135_regulator_init(struct max17135 *max17135)
++static int __init max17135_regulator_init(struct max17135 *max17135)
+ {
+ 	struct max17135_platform_data *pdata = &max17135_pdata;
+ 	int i, ret;
+diff --git a/arch/arm/mach-mx5/mx50_rdp.c b/arch/arm/mach-mx5/mx50_rdp.c
+index 243a76d..f8eda99 100644
+--- a/arch/arm/mach-mx5/mx50_rdp.c
++++ b/arch/arm/mach-mx5/mx50_rdp.c
+@@ -1024,7 +1024,7 @@ static struct max17135_platform_data max17135_pdata __initdata = {
+ 	.init = max17135_regulator_init,
+ };
+ 
+-static int max17135_regulator_init(struct max17135 *max17135)
++static int __init max17135_regulator_init(struct max17135 *max17135)
+ {
+ 	struct max17135_platform_data *pdata = &max17135_pdata;
+ 	int i, ret;
+diff --git a/arch/arm/mach-mx5/mx53_smd_rfkill.c b/arch/arm/mach-mx5/mx53_smd_rfkill.c
+index f669dd0..c033c6e 100644
+--- a/arch/arm/mach-mx5/mx53_smd_rfkill.c
++++ b/arch/arm/mach-mx5/mx53_smd_rfkill.c
+@@ -142,25 +142,24 @@ static int __devexit mxc_bt_rfkill_remove(struct platform_device *dev)
+ 	return 0;
+ }
+ 
+-static struct platform_driver mxc_bt_rfkill_drv = {
++static struct platform_driver mxc_bt_rfkill_driver = {
+ 	.driver = {
+ 		.name = "mxc_bt_rfkill",
+ 	},
+-
+ 	.probe	= mxc_bt_rfkill_probe,
+ 	.remove = __devexit_p(mxc_bt_rfkill_remove),
+ };
+ 
+ static int __init mxc_bt_rfkill_init(void)
+ {
+-	return platform_driver_register(&mxc_bt_rfkill_drv);
++	return platform_driver_register(&mxc_bt_rfkill_driver);
+ }
+ 
+ module_init(mxc_bt_rfkill_init);
+ 
+ static void __exit mxc_bt_rfkill_exit(void)
+ {
+-	platform_driver_unregister(&mxc_bt_rfkill_drv);
++	platform_driver_unregister(&mxc_bt_rfkill_driver);
+ }
+ 
+ module_exit(mxc_bt_rfkill_exit);
+diff --git a/arch/arm/plat-mxc/cpufreq.c b/arch/arm/plat-mxc/cpufreq.c
+index 5ba4a71..d4e4c3e 100644
+--- a/arch/arm/plat-mxc/cpufreq.c
++++ b/arch/arm/plat-mxc/cpufreq.c
+@@ -205,7 +205,7 @@ static int mxc_set_target(struct cpufreq_policy *policy,
+ 	return ret;
+ }
+ 
+-static int __init mxc_cpufreq_driver_init(struct cpufreq_policy *policy)
++static int __devinit mxc_cpufreq_driver_init(struct cpufreq_policy *policy)
+ {
+ 	int ret;
+ 	int i;
+@@ -312,7 +312,7 @@ static struct cpufreq_driver mxc_driver = {
+ 	.name = "imx",
+ };
+ 
+-static int __devinit mxc_cpufreq_init(void)
++static int __init mxc_cpufreq_init(void)
+ {
+ 	return cpufreq_register_driver(&mxc_driver);
+ }
+-- 
+1.5.4.4
+
